@@ -28,9 +28,6 @@ const FILTERS = [
 
   // Filters that deny should go after allow filters
   msg => {
-    if (!msg._.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')) msg.deny('empty subject');
-  },
-  msg => {
     if (!msg._.subject) msg.deny('empty subject');
   },
   msg => {
@@ -112,7 +109,7 @@ async function main() {
   const lastUid = uidNext || 0;
   if (uidNext) {
     // Get messages since last
-    ids = `${uidNext}:*`;
+    ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
   } else {
     // First time through, get messages for the past week
     const days = process.env.DAYS || 7;
@@ -121,45 +118,47 @@ async function main() {
   }
   uidNext = box.uidnext;
 
-  // For each message ...
-  const spam = await util.fetchAndFilter(imap, ids, (msg, i) => {
-    line(`Checking message ${msg.uid}`);
-    // Fetch will return the last message, even if it's uid is less than the
-    // range requested (wtf?!?), so we throw those away here.
-    if (msg.uid < lastUid) return;
+  line(`Checking messages [${ids}]`);
+  if (ids.length > 0) {
+    // For each message ...
+    const spam = await util.fetchAndFilter(imap, ids, (msg, i) => {
+      // Fetch will return the last message, even if it's uid is less than the
+      // range requested (wtf?!?), so we throw those away here.
+      if (msg.uid < lastUid) return;
 
-    // Pull together useful message state for filters
-    msg._ = {
-      from: msg.from.value[0].address.toLowerCase(),
-      emails: util.getRecipients(msg),
-      subject: msg.subject ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '') : ''
-    };
+      // Pull together useful message state for filters
+      msg._ = {
+        from: msg.from.value[0].address.toLowerCase(),
+        emails: util.getRecipients(msg),
+        subject: msg.subject ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '') : ''
+      };
 
-    msg.allow = status => msg._allow = status;
-    msg.deny = status => msg._deny = status;
+      msg.allow = status => msg._allow = status;
+      msg.deny = status => msg._deny = status;
 
-    // Apply each filter
-    FILTERS.forEach(filter => {
-      if (!filter || msg._deny || msg._allow) return;
-      filter(msg);
+      // Apply each filter
+      FILTERS.forEach(filter => {
+        if (!filter || msg._deny || msg._allow) return;
+        filter(msg);
+      });
+
+      if (msg._deny) {
+        console.log(`${colors.blue(msg._deny)}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
+        return true;
+      }
+
+      return false;
     });
 
-    if (msg._deny) {
-      console.log(`${colors.blue(msg._deny)}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
-      return true;
+    const spamIds = spam.map(msg => msg.uid);
+    if (spamIds && spamIds.length > 0) {
+      // Also mark as seen.  Do this before moving, as message uids change as a
+      // result of the move, below?
+      // await imap.addFlagsAsync(spamIds, '\\Seen');
+
+      // Move out of Inbox
+      await imap.moveAsync(spamIds, config.trash);
     }
-
-    return false;
-  });
-
-  const spamIds = spam.map(msg => msg.uid);
-  if (spamIds && spamIds.length > 0) {
-    // Also mark as seen.  Do this before moving, as message uids change as a
-    // result of the move, below?
-    // await imap.addFlagsAsync(spamIds, '\\Seen');
-
-    // Move out of Inbox
-    await imap.moveAsync(spamIds, config.trash);
   }
 
   await imap.closeBoxAsync(true);
@@ -178,7 +177,8 @@ if (process.env.TIMER) {
       console.error(err);
     }
 
-    line(`sleeping`);
+    process.stdout.write(`... done (sleeping)`);
+
     setTimeout(loop, parseInt(process.env.TIMER));
   }
 
