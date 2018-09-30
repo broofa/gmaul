@@ -31,10 +31,24 @@ const FILTERS = [
     if (!msg._.subject) msg.deny('empty subject');
   },
   msg => {
+    const ctype = msg.headers.get('content-type');
+    const charset = ctype.params && ctype.params.charset;
+
+    if (charset && charset.toLowerCase() != 'utf-8') msg.deny(`charset ${charset}`);
+  },
+  msg => {
+    const name = msg._.fromName;
+    if (name.length <= 1) return;
+
+    const sl = new StringLang(name);
+    const latinScore = (name.length - sl.basicLatin) / name.length;
+    if (latinScore > .2) msg.deny('non-latin chars (sender)');
+  },
+  msg => {
     const sl = new StringLang(msg._.subject);
     const len = msg._.subject.length;
     const latinScore = (len - sl.basicLatin) / len;
-    if (len > 1 && latinScore > .2) msg.deny('non-latin chars');
+    if (len > 1 && latinScore > .2) msg.deny('non-latin chars (subject)');
   },
   msg => {
     if (msg._.emails.length <= 0) msg.deny('empty recipients');
@@ -129,6 +143,7 @@ async function main() {
       // Pull together useful message state for filters
       msg._ = {
         from: msg.from.value[0].address.toLowerCase(),
+        fromName: msg.from.value[0].name.toLowerCase(),
         emails: util.getRecipients(msg),
         subject: msg.subject ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '') : ''
       };
