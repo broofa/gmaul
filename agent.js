@@ -186,6 +186,8 @@ process.on('unhandledRejection', console.error);
 
 if (process.env.TIMER) {
   const loop = async () => {
+    setTimeout(loop, parseInt(process.env.TIMER));
+
     try {
       await main();
     } catch (err) {
@@ -193,8 +195,6 @@ if (process.env.TIMER) {
     }
 
     process.stdout.write(`... done (sleeping)`);
-
-    setTimeout(loop, parseInt(process.env.TIMER));
   }
 
   loop();
