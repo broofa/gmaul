@@ -73,7 +73,8 @@ const FILTERS = [
 
 function line(str) {
   // Write a string on the current line, clearing to end of line
-  process.stdout.write(`\r${str}\x1b[K`);
+  // process.stdout.write(`\r${str}\x1b[K`);
+  console.log(str);
 }
 
 async function main() {
@@ -106,14 +107,11 @@ async function main() {
   try {
     await whitelist.init();
   } catch (err) {
-    console.error('Failed to initialize whitelist');
+    console.error('Failed to initialize whitelist', err);
   }
 
   if (!whitelist.addresses) {
-    line('Generating whitelist.  This may take a few minutes ...');
-    await whitelist.generate();
-    if (!whitelist.addresses) throw Error('Failed to create whitelist');
-    line('Created whitelist');
+    throw Error('Whitelist unexpectedly uninitialized');
   }
 
   // Open INBOX (read-write)
@@ -132,10 +130,12 @@ async function main() {
   }
   uidNext = box.uidnext;
 
-  line(`Checking messages [${ids}]`);
+  // line(`Checking messages [${ids}]`);
   if (ids.length > 0) {
+    let loggedTime;
+
     // For each message ...
-    const spam = await util.fetchAndFilter(imap, ids, (msg, i) => {
+    const spamIds= await util.fetchAndFilter(imap, ids, (msg, i) => {
       // Fetch will return the last message, even if it's uid is less than the
       // range requested (wtf?!?), so we throw those away here.
       if (msg.uid < lastUid) return;
@@ -158,14 +158,16 @@ async function main() {
       });
 
       if (msg._deny) {
-        console.log(`${colors.blue(msg._deny)}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
-        return true;
+        if (!loggedTime) console.log(new Date().toLocaleString());
+        loggedTime = true;
+        console.log(`${msg._deny}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
+
+        return msg.uid;
       }
 
-      return false;
+      return null;
     });
 
-    const spamIds = spam.map(msg => msg.uid);
     if (spamIds && spamIds.length > 0) {
       // Also mark as seen.  Do this before moving, as message uids change as a
       // result of the move, below?
@@ -184,20 +186,26 @@ async function main() {
 process.on('uncaughtException', console.error);
 process.on('unhandledRejection', console.error);
 
-if (process.env.TIMER) {
-  const loop = async () => {
-    setTimeout(loop, parseInt(process.env.TIMER));
+let before = process.memoryUsage();
+const loop = async () => {
 
-    try {
-      await main();
-    } catch (err) {
-      console.error(err);
-    }
-
-    process.stdout.write(`... done (sleeping)`);
+  try {
+    await main();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    const after = process.memoryUsage();
+    const mb = x => (x/1e6).toFixed(1) + ' MB';
+    console.log(
+      new Date().toLocaleString(),
+      `${mb(before.heapUsed)} (${mb(after.heapUsed - before.heapUsed)})`,
+      `${mb(before.heapTotal)} (${mb(after.heapTotal - before.heapTotal)})`,
+    );
+    before = after;
+    setTimeout(loop, process.env.interval || config.interval || 60e3);
   }
 
-  loop();
-} else {
-  main();
+  // process.stdout.write(`... done (sleeping)`);
 }
+
+loop();
