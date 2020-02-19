@@ -4,17 +4,17 @@
   "description": "A little agent for doing stuff with GMail",
   "main": "gmaul.js",
   "dependencies": {
-    "@broofa/asyncproxy": "^1.0.0",
-    "@broofa/stringlang": "^1.0.0",
-    "colors": "1.3.1",
-    "html-to-text": "4.0.0",
+    "@broofa/asyncproxy": "1.0.4",
+    "@broofa/stringlang": "1.0.3",
+    "colors": "1.4.0",
+    "html-to-text": "5.1.1",
     "imap": "0.8.19",
     "language-detect": "1.1.0",
     "mailparser2": "1.0.0",
-    "terminal-kit": "1.26.1"
+    "terminal-kit": "1.33.15"
   },
   "devDependencies": {
-    "eslint": "5.2.0"
+    "eslint": "6.8.0"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

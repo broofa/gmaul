@@ -28,11 +28,14 @@ const FILTERS = [
 
   // Filters that deny should go after allow filters
   msg => {
+    if (msg._.from && /(\.com\.tw)$/.test(msg._.from)) msg.deny(`from domain ${RegExp.$1}`);
+  },
+  msg => {
     if (!msg._.subject) msg.deny('empty subject');
   },
   msg => {
     const ctype = msg.headers.get('content-type');
-    const charset = ctype.params && ctype.params.charset;
+    const charset = ctype && ctype.params && ctype.params.charset;
 
     if (charset && charset.toLowerCase() != 'utf-8') msg.deny(`charset ${charset}`);
   },
@@ -41,14 +44,11 @@ const FILTERS = [
     if (name.length <= 1) return;
 
     const sl = new StringLang(name);
-    const latinScore = (name.length - sl.basicLatin) / name.length;
-    if (latinScore > .2) msg.deny('non-latin chars (sender)');
+    if (name.length - sl.basicLatin > 0) msg.deny('non-latin chars (name)');
   },
   msg => {
     const sl = new StringLang(msg._.subject);
-    const len = msg._.subject.length;
-    const latinScore = (len - sl.basicLatin) / len;
-    if (len > 1 && latinScore > .2) msg.deny('non-latin chars (subject)');
+    if (msg._.subject.length - sl.basicLatin > 0) msg.deny('non-latin chars (subject)');
   },
   msg => {
     if (msg._.emails.length <= 0) msg.deny('empty recipients');
@@ -73,19 +73,19 @@ const FILTERS = [
 
 function line(str) {
   // Write a string on the current line, clearing to end of line
-  // process.stdout.write(`\r${str}\x1b[K`);
-  console.log(str);
+  process.stdout.write(`\r${str}\x1b[K`);
+  // console.log(str);
 }
 
 async function main() {
   let imap;
   try {
     imap = await util.connect();
+    imap.on('error', err => console.error('IMAP Error', err));
   } catch(err) {
     console.error(`Failed to connect: ${colors.red(err.message)}`);
     return;
   }
-
 
   /*
   // List mailboxes
@@ -102,7 +102,6 @@ async function main() {
   });
   console.log('Mailboxes', names);
   */
-
 
   try {
     await whitelist.init();
@@ -188,12 +187,15 @@ process.on('unhandledRejection', console.error);
 
 let before = process.memoryUsage();
 const loop = async () => {
-
+line('Loop start');
   try {
     await main();
   } catch (err) {
+line('Loop error');
     console.error(err);
   } finally {
+line('Loop finally (mem)');
+/*
     const after = process.memoryUsage();
     const mb = x => (x/1e6).toFixed(1) + ' MB';
     console.log(
@@ -202,9 +204,12 @@ const loop = async () => {
       `${mb(before.heapTotal)} (${mb(after.heapTotal - before.heapTotal)})`,
     );
     before = after;
+    */
+line('Loop finally (timeout)');
     setTimeout(loop, process.env.interval || config.interval || 60e3);
   }
 
+line('Loop end');
   // process.stdout.write(`... done (sleeping)`);
 }
 
