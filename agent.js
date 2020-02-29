@@ -8,6 +8,7 @@ const path = require('path');
 const util = require('./lib/util');
 const whitelist = require('./lib/whitelist');
 const {URL} = require('url');
+const chalk = require('chalk');
 
 let uidNext;
 
@@ -27,6 +28,13 @@ const FILTERS = [
   },
 
   // Filters that deny should go after allow filters
+  msg => {
+    const prop = ['name', 'address'].find(prop => {
+      const v = msg.from.value[0][prop];
+      return v && v.length > 5 && v.toUpperCase() == v;
+    })
+    if (prop) msg.deny(`All caps (${prop})`);
+  },
   msg => {
     if (msg._.from && /(\.com\.tw)$/.test(msg._.from)) msg.deny(`from domain ${RegExp.$1}`);
   },
@@ -71,38 +79,51 @@ const FILTERS = [
   },
 ];
 
-function line(str) {
-  // Write a string on the current line, clearing to end of line
-  process.stdout.write(`\r${str}\x1b[K`);
-  // console.log(str);
-}
+function line(str) {process.stdout.write(`\r${str}\x1b[K`);}
 
+let imap;
 async function main() {
-  let imap;
-  try {
-    imap = await util.connect();
-    imap.on('error', err => console.error('IMAP Error', err));
-  } catch(err) {
-    console.error(`Failed to connect: ${colors.red(err.message)}`);
-    return;
+  if (!imap) {
+    try {
+      imap = await util.connect();
+      imap.on('error', err => {
+        console.error('IMAP Error', err);
+        try {
+          if (imap) imap.end(imap);
+        } finally {
+          imap = null;
+        }
+      });
+    } catch(err) {
+      console.error(`Failed to connect: ${colors.red(err.message)}`);
+      return;
+    }
+
+    // List mailboxes
+    const boxes = await imap.getBoxesAsync();
+    function logBoxes(boxes, prefix = '') {
+      if (!boxes) return;
+      for (const [name, box] of Object.entries(boxes)) {
+        const boxPath = `${prefix ? `${prefix}${box.delimiter}` : ''}${name}`;
+        console.log(`${chalk.bold(boxPath)} (${box.attribs})`);
+        logBoxes(box.children, boxPath);
+      }
+    }
+
+    logBoxes(boxes);
+
+    /*
+    // Note: This doesn't appear to work (possibly due to [GMAIL]/Spam folder
+    // having \Noselect option?)
+    const spam = await imap.openBoxAsync('[GMAIL]/Spam', true);
+    const since = new Date(Date.now() - 24 * 3600e3); // Previous day
+    ids = await imap.searchAsync([['SINCE', since.toDateString()]]);
+    await imap.closeBoxAsync();
+    */
   }
 
-  /*
-  // List mailboxes
-  const boxes = await imap.getBoxesAsync(imap);
-  const names = [];
-  Object.keys(boxes).sort().forEach(boxName =>  {
-    names.push(boxName);
-    const box = boxes[boxName];
-    if (box.children) {
-      Object.keys(box.children).sort().forEach(childName => {
-        names.push(`${boxName}${box.delimiter}${childName}`);
-      });
-    }
-  });
-  console.log('Mailboxes', names);
-  */
-
+  line('Loop start');
+  // process.stdout.write(`... done (sleeping)`);
   try {
     await whitelist.init();
   } catch (err) {
@@ -179,38 +200,21 @@ async function main() {
 
   await imap.closeBoxAsync(true);
 
-  imap.end(imap);
+  line('Loop end');
 }
 
 process.on('uncaughtException', console.error);
 process.on('unhandledRejection', console.error);
 
-let before = process.memoryUsage();
 const loop = async () => {
-line('Loop start');
   try {
     await main();
   } catch (err) {
-line('Loop error');
+    line('Loop error\n');
     console.error(err);
   } finally {
-line('Loop finally (mem)');
-/*
-    const after = process.memoryUsage();
-    const mb = x => (x/1e6).toFixed(1) + ' MB';
-    console.log(
-      new Date().toLocaleString(),
-      `${mb(before.heapUsed)} (${mb(after.heapUsed - before.heapUsed)})`,
-      `${mb(before.heapTotal)} (${mb(after.heapTotal - before.heapTotal)})`,
-    );
-    before = after;
-    */
-line('Loop finally (timeout)');
-    setTimeout(loop, process.env.interval || config.interval || 60e3);
+    setTimeout(loop, process.env.interval || config.interval || 1e3);
   }
-
-line('Loop end');
-  // process.stdout.write(`... done (sleeping)`);
 }
 
 loop();
