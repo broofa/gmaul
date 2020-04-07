@@ -29,6 +29,14 @@ const FILTERS = [
 
   // Filters that deny should go after allow filters
   msg => {
+    const regex = /marketing|opportunity|campaign/;
+    if (regex.test(msg._.from)) msg.deny('spammy terms (sender)');
+    if (regex.test(msg._.subject)) msg.deny('spammy terms (subject)');
+  },
+  msg => {
+    if (msg._.from.split(/\s+/).length > 2) msg.deny(`too many words in sender`);
+  },
+  msg => {
     const prop = ['name', 'address'].find(prop => {
       const v = msg.from.value[0][prop];
       return v && v.length > 5 && v.toUpperCase() == v;
@@ -99,6 +107,7 @@ async function main() {
       return;
     }
 
+    /*
     // List mailboxes
     const boxes = await imap.getBoxesAsync();
     function logBoxes(boxes, prefix = '') {
@@ -111,6 +120,7 @@ async function main() {
     }
 
     logBoxes(boxes);
+    */
 
     /*
     // Note: This doesn't appear to work (possibly due to [GMAIL]/Spam folder
