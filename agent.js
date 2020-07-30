@@ -2,18 +2,26 @@
 
 const StringLang = require('@broofa/stringlang');
 const colors = require('colors');
-const config = require('./config/gmaul');
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 const util = require('./lib/util');
 const whitelist = require('./lib/whitelist');
 const {URL} = require('url');
 const chalk = require('chalk');
 
-let uidNext;
+const CONFIG_PATH = path.join(__dirname, 'config/gmaul');
+const SUBJECTS_PATH = path.join(__dirname, 'config/_subjects.json');
+const SUBJECT_EXPIRY = 3600e3;
+
+const config = require(CONFIG_PATH);
 
 // List of user addresses
 const userAliases = [config.server.user, ...config.aliases];
+
+// Spammy term regex
+const spamRegex = config.spamTerms && new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
+
+let uidNext;
 
 // ORDER HERE IS IMPORTANT
 const FILTERS = [
@@ -29,9 +37,11 @@ const FILTERS = [
 
   // Filters that deny should go after allow filters
   msg => {
-    const regex = /marketing|opportunity|campaign/;
-    if (regex.test(msg._.from)) msg.deny('spammy terms (sender)');
-    if (regex.test(msg._.subject)) msg.deny('spammy terms (subject)');
+    if (!spamRegex) return;
+    const regex = /\b((?:market|opportunit|campaign|seo|pric|ppe|sanitiz|mask|fintech)\w*)/i;
+    if (spamRegex.test(msg._.from)) msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
+    if (spamRegex.test(msg._.fromName)) msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
+    if (spamRegex.test(msg._.subject)) msg.deny(`spammy term: "${RegExp.$1}" (subject)`);
   },
   msg => {
     if (msg._.from.split(/\s+/).length > 2) msg.deny(`too many words in sender`);
@@ -73,22 +83,70 @@ const FILTERS = [
     if (!msg._.emails.find(e => userAliases.includes(e))) msg.deny('not sent to user');
   },
   msg => {
-    // Spam tends to come from "foo###@gmail.com"
+    // Spam comes from "foo###@gmail.com" address
+    if (/\d\d@gmail.com/.test(msg._.from)) msg.deny('gmail## sender');
+  },
+  msg => {
+    // Spam often sent to "foo###@gmail.com" addresses
     const suspect = msg._.emails.filter(e => /\d\d@gmail.com/.test(e));
-    if (suspect.length >= 2) msg.deny('suspicious recipients');
+    if (suspect.length >= 2) msg.deny('gmail## recipients');
   },
   msg => {
     if (/^(?:\w[\w-]+\w\.)+(?:com)$/i.test(msg._.subject)) msg.deny('subject is domain');
   },
   msg => {
-    const user = msg.to.value.find(e => userAliases.includes(e.address));
+    const user = msg._.emails.find(e => userAliases.includes(e.address));
     if (user && user.name &&
       !config.nameRegex.test(user.name)) msg.deny('user email but not user name');
   },
 ];
 
-function line(str) {process.stdout.write(`\r${str}\x1b[K`);}
+/**
+ * Mark messages with duplicate subjects as spam
+ */
+let _subjects = {};
+try {
+  _subjects = require(SUBJECTS_PATH);
+} catch (err) {
+  console.log('Subjects file not loaded');
+}
 
+function checkSubject(msg, spamIds) {
+  const time = Date.now();
+  const {uid} = msg;
+  let {subject = ''} = msg;
+
+  subject = subject.toLowerCase()
+    .replace(/\d+/g, '')
+    .replace(/\W+/g, ' ')
+
+  if (!subject) return;
+
+  const last = _subjects[subject];
+
+  // If last message with this subject was seen < 1h ago, mark both messages
+  // as spam
+  if (last && last.uid != uid && time - last.time < SUBJECT_EXPIRY) {
+    if (!msg._deny || !spamIds.has(last.uid)) console.log(`(duplicate subject)`, msg.subject);
+    spamIds.add(last.uid);
+    spamIds.add(uid);
+  }
+  _subjects[subject] = {time, uid};
+}
+
+async function writeSubjects(subjects) {
+  // Purge stale entries
+  const now = Date.now();
+  for (const [k, {time}] of Object.entries(subjects)) {
+    if (time < now - SUBJECT_EXPIRY) delete subjects[k];
+  }
+
+  await fs.writeFile(SUBJECTS_PATH, JSON.stringify(subjects, null, 2));
+}
+
+/**
+ * Main entry point
+ */
 let imap;
 async function main() {
   if (!imap) {
@@ -132,7 +190,7 @@ async function main() {
     */
   }
 
-  line('Loop start');
+  console.log('Loop start');
   // process.stdout.write(`... done (sleeping)`);
   try {
     await whitelist.init();
@@ -160,12 +218,13 @@ async function main() {
   }
   uidNext = box.uidnext;
 
-  // line(`Checking messages [${ids}]`);
+  // console.log(`Checking messages [${ids}]`);
   if (ids.length > 0) {
     let loggedTime;
 
     // For each message ...
-    const spamIds= await util.fetchAndFilter(imap, ids, (msg, i) => {
+    const spamIds = new Set();
+    const filteredIds = await util.fetchAndFilter(imap, ids, (msg, i) => {
       // Fetch will return the last message, even if it's uid is less than the
       // range requested (wtf?!?), so we throw those away here.
       if (msg.uid < lastUid) return;
@@ -183,9 +242,16 @@ async function main() {
 
       // Apply each filter
       FILTERS.forEach(filter => {
-        if (!filter || msg._deny || msg._allow) return;
+        if (!filter || msg._allow || msg._deny) return;
         filter(msg);
       });
+
+      if (process.env.DEBUG) {
+        console.log(`DEBUG ${msg._allow || msg._deny}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
+      }
+
+      // Check for messages w/ duplicate subjects
+      if (!msg._allow) checkSubject(msg, spamIds);
 
       if (msg._deny) {
         if (!loggedTime) console.log(new Date().toLocaleString());
@@ -198,29 +264,39 @@ async function main() {
       return null;
     });
 
-    if (spamIds && spamIds.length > 0) {
+    await writeSubjects(_subjects);
+
+    for (const id of filteredIds) spamIds.add(id);
+
+    if (spamIds.size) {
       // Also mark as seen.  Do this before moving, as message uids change as a
       // result of the move, below?
       // await imap.addFlagsAsync(spamIds, '\\Seen');
 
       // Move out of Inbox
-      await imap.moveAsync(spamIds, config.trash);
+      await imap.moveAsync([...spamIds], config.trash);
     }
   }
 
   await imap.closeBoxAsync(true);
 
-  line('Loop end');
+  console.log('Loop end');
 }
 
-process.on('uncaughtException', console.error);
-process.on('unhandledRejection', console.error);
+process.on('uncaughtException', err => {
+  console.error('UNCAUGHT', err);
+  process.exit();
+});
+
+process.on('unhandledRejection', err => {
+  console.error('UNHANDLED', err);
+  process.exit();
+});
 
 const loop = async () => {
   try {
     await main();
   } catch (err) {
-    line('Loop error\n');
     console.error(err);
   } finally {
     setTimeout(loop, process.env.interval || config.interval || 1e3);
