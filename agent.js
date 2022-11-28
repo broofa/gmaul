@@ -6,7 +6,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const util = require('./lib/util');
 const whitelist = require('./lib/whitelist');
-const {URL} = require('url');
+const { URL } = require('url');
 const chalk = require('chalk');
 
 const CONFIG_PATH = path.join(__dirname, 'config/gmaul');
@@ -19,7 +19,10 @@ const config = require(CONFIG_PATH);
 const userAliases = [config.server.user, ...config.aliases];
 
 // Spammy term regex
-const spamRegex = config.spamTerms && new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
+const spamRegex =
+  config.spamTerms &&
+  new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
+console.log('spamRegex', spamRegex);
 
 let uidNext;
 
@@ -27,34 +30,43 @@ let uidNext;
 const FILTERS = [
   // Filters that allow should go first
   msg => {
-    if (msg._.from && whitelist.lookup(msg._.from)) msg.allow('sender in whitelist');
+    if (msg._.from && whitelist.lookup(msg._.from))
+      msg.allow('sender in whitelist');
   },
   msg => {
     // Allow emails sent to someone we've corresponded with
-    const friends = msg._.emails.filter(e => !/broofa/i.test(e) && whitelist.lookup(e))
+    const friends = msg._.emails.filter(
+      e => !/broofa/i.test(e) && whitelist.lookup(e)
+    );
     if (friends.length > 0) msg.allow('other recipient in whitelist');
   },
 
   // Filters that deny should go after allow filters
   msg => {
     if (!spamRegex) return;
-    const regex = /\b((?:market|opportunit|campaign|seo|pric|ppe|sanitiz|mask|fintech)\w*)/i;
-    if (spamRegex.test(msg._.from)) msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
-    if (spamRegex.test(msg._.fromName)) msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
-    if (spamRegex.test(msg._.subject)) msg.deny(`spammy term: "${RegExp.$1}" (subject)`);
+    const regex =
+      /\b((?:market|opportunit|campaign|seo|pric|ppe|sanitiz|mask|fintech)\w*)/i;
+    if (spamRegex.test(msg._.from))
+      msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
+    if (spamRegex.test(msg._.fromName))
+      msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
+    if (spamRegex.test(msg._.subject))
+      msg.deny(`spammy term: "${RegExp.$1}" (subject)`);
   },
   msg => {
-    if (msg._.from.split(/\s+/).length > 2) msg.deny(`too many words in sender`);
+    if (msg._.from.split(/\s+/).length > 2)
+      msg.deny('too many words in sender');
   },
   msg => {
     const prop = ['name', 'address'].find(prop => {
       const v = msg.from.value[0][prop];
       return v && v.length > 5 && v.toUpperCase() == v;
-    })
+    });
     if (prop) msg.deny(`All caps (${prop})`);
   },
   msg => {
-    if (msg._.from && /(\.com\.tw)$/.test(msg._.from)) msg.deny(`from domain ${RegExp.$1}`);
+    if (msg._.from && /(\.com\.tw)$/.test(msg._.from))
+      msg.deny(`from domain ${RegExp.$1}`);
   },
   msg => {
     if (!msg._.subject) msg.deny('empty subject');
@@ -63,7 +75,8 @@ const FILTERS = [
     const ctype = msg.headers.get('content-type');
     const charset = ctype && ctype.params && ctype.params.charset;
 
-    if (charset && charset.toLowerCase() != 'utf-8') msg.deny(`charset ${charset}`);
+    if (charset && charset.toLowerCase() != 'utf-8')
+      msg.deny(`charset ${charset}`);
   },
   msg => {
     const name = msg._.fromName;
@@ -74,13 +87,15 @@ const FILTERS = [
   },
   msg => {
     const sl = new StringLang(msg._.subject);
-    if (msg._.subject.length - sl.basicLatin > 0) msg.deny('non-latin chars (subject)');
+    if (msg._.subject.length - sl.basicLatin > 0)
+      msg.deny('non-latin chars (subject)');
   },
   msg => {
     if (msg._.emails.length <= 0) msg.deny('empty recipients');
   },
   msg => {
-    if (!msg._.emails.find(e => userAliases.includes(e))) msg.deny('not sent to user');
+    if (!msg._.emails.find(e => userAliases.includes(e)))
+      msg.deny('not sent to user');
   },
   msg => {
     // Spam comes from "foo###@gmail.com" address
@@ -92,12 +107,13 @@ const FILTERS = [
     if (suspect.length >= 2) msg.deny('gmail## recipients');
   },
   msg => {
-    if (/^(?:\w[\w-]+\w\.)+(?:com)$/i.test(msg._.subject)) msg.deny('subject is domain');
+    if (/^(?:\w[\w-]+\w\.)+(?:com)$/i.test(msg._.subject))
+      msg.deny('subject is domain');
   },
   msg => {
     const user = msg._.emails.find(e => userAliases.includes(e.address));
-    if (user && user.name &&
-      !config.nameRegex.test(user.name)) msg.deny('user email but not user name');
+    if (user && user.name && !config.nameRegex.test(user.name))
+      msg.deny('user email but not user name');
   },
 ];
 
@@ -113,12 +129,10 @@ try {
 
 function checkSubject(msg, spamIds) {
   const time = Date.now();
-  const {uid} = msg;
-  let {subject = ''} = msg;
+  const { uid } = msg;
+  let { subject = '' } = msg;
 
-  subject = subject.toLowerCase()
-    .replace(/\d+/g, '')
-    .replace(/\W+/g, ' ')
+  subject = subject.toLowerCase().replace(/\d+/g, '').replace(/\W+/g, ' ');
 
   if (!subject) return;
 
@@ -127,17 +141,18 @@ function checkSubject(msg, spamIds) {
   // If last message with this subject was seen < 1h ago, mark both messages
   // as spam
   if (last && last.uid != uid && time - last.time < SUBJECT_EXPIRY) {
-    if (!msg._deny || !spamIds.has(last.uid)) console.log(`(duplicate subject)`, msg.subject);
+    if (!msg._deny || !spamIds.has(last.uid))
+      console.log('(duplicate subject)', msg.subject);
     spamIds.add(last.uid);
     spamIds.add(uid);
   }
-  _subjects[subject] = {time, uid};
+  _subjects[subject] = { time, uid };
 }
 
 async function writeSubjects(subjects) {
   // Purge stale entries
   const now = Date.now();
-  for (const [k, {time}] of Object.entries(subjects)) {
+  for (const [k, { time }] of Object.entries(subjects)) {
     if (time < now - SUBJECT_EXPIRY) delete subjects[k];
   }
 
@@ -160,7 +175,7 @@ async function main() {
           imap = null;
         }
       });
-    } catch(err) {
+    } catch (err) {
       console.error(`Failed to connect: ${colors.red(err.message)}`);
       return;
     }
@@ -234,11 +249,13 @@ async function main() {
         from: msg.from.value[0].address.toLowerCase(),
         fromName: msg.from.value[0].name.toLowerCase(),
         emails: util.getRecipients(msg),
-        subject: msg.subject ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '') : ''
+        subject: msg.subject
+          ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
+          : '',
       };
 
-      msg.allow = status => msg._allow = status;
-      msg.deny = status => msg._deny = status;
+      msg.allow = status => (msg._allow = status);
+      msg.deny = status => (msg._deny = status);
 
       // Apply each filter
       FILTERS.forEach(filter => {
@@ -247,7 +264,11 @@ async function main() {
       });
 
       if (process.env.DEBUG) {
-        console.log(`DEBUG ${msg._allow || msg._deny}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
+        console.log(
+          `DEBUG ${msg._allow || msg._deny}: (${msg._.from})${
+            msg._.subject ? ` "${msg.subject}"` : ''
+          }`
+        );
       }
 
       // Check for messages w/ duplicate subjects
@@ -256,7 +277,11 @@ async function main() {
       if (msg._deny) {
         if (!loggedTime) console.log(new Date().toLocaleString());
         loggedTime = true;
-        console.log(`${msg._deny}: (${msg._.from})${msg._.subject ? ` "${msg.subject}"` : ''}`);
+        console.log(
+          `${msg._deny}: (${msg._.from})${
+            msg._.subject ? ` "${msg.subject}"` : ''
+          }`
+        );
 
         return msg.uid;
       }
@@ -301,6 +326,6 @@ const loop = async () => {
   } finally {
     setTimeout(loop, process.env.interval || config.interval || 1e3);
   }
-}
+};
 
 loop();
