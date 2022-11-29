@@ -5,11 +5,18 @@ import { simpleParser2 as simpleParser } from 'mailparser2';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
-const CONFIG_PATH = path.join(__dirname, '../config/gmaul.json');
+import logger from './GMaulLogger.js';
 
-export async function getConfig() {
-  const json = await fs.readFile(CONFIG_PATH);
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
+const CONFIG_DIR = 'config';
+const CONFIG_FILE = 'gmaul.json';
+
+export function getConfigPath(filename) {
+  return path.join(__dirname, '..', CONFIG_DIR, filename);
+}
+
+export async function getConfig(filename = 'gmaul.json') {
+  const json = await fs.readFile(getConfigPath(filename));
   return JSON.parse(json);
 }
 
@@ -25,7 +32,7 @@ function parseMessage(msg) {
     msg.on('body', (stream, info) => {
       const chunks = [];
 
-      stream.once('error', (err) => console.error(err));
+      stream.once('error', (err) => logger.error(err));
       stream.on('data', (chunk) => chunks.push(chunk));
       stream.once('end', () => {
         raw = Buffer.concat(chunks).toString('utf8');
@@ -59,17 +66,14 @@ export function getBoxes() {
       });
     }
   });
-  console.log('Mailboxes', names);
+  logger.log('Mailboxes', names);
   */
 }
 
 export function connect(err, cb) {
   return new Promise((resolve, reject) => {
     const imap = new Imap(config.server);
-    imap.once('ready', () => {
-      imap.removeListener('error', reject);
-      resolve(asyncProxy(imap));
-    });
+    imap.once('ready', () => resolve(asyncProxy(imap)));
     imap.once('error', reject);
     imap.connect();
   });
@@ -141,7 +145,7 @@ export function parseEmail(emails) {
       if (/@/.test(email)) {
         arr.push(email.trim().toLowerCase());
       } else {
-        console.error('Malformed email:', email);
+        logger.error('Malformed email:', email);
       }
     });
   }

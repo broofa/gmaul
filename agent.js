@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 
 import { unicodeBlockCount } from '@broofa/stringlang';
-import colors from 'colors';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import {
   connect,
   fetchAndFilter,
   getConfig,
+  getConfigPath,
   getRecipients,
-} from './lib/util.js';
-import whitelist from './lib/whitelist.js';
+} from './src/util.js';
+import whitelist from './src/whitelist.js';
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+import logger from './src/GMaulLogger.js';
 
-const SUBJECTS_PATH = path.join(__dirname, 'config/_subjects.json');
+// DEBUG HOW PROCESS IS EXITING
+const origExit = process.exit;
+process.exit = function (code) {
+  console.trace('EXITING WITH CODE', code);
+  origExit(code);
+};
+
+const SUBJECTS_FILE = '_subjects.json';
 const SUBJECT_EXPIRY = 3600e3;
 
 const config = await getConfig();
@@ -26,13 +32,13 @@ const userAliases = [config.server.user, ...config.aliases];
 const spamRegex =
   config.spamTerms &&
   new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
-console.log('spamRegex', spamRegex);
 
 let uidNext;
 
-// ORDER HERE IS IMPORTANT
 const FILTERS = [
-  // Filters that allow should go first
+  // ORDER HERE IS IMPORTANT
+
+  // ALLOW filters (go before DENY)
   (msg) => {
     if (msg._.from && whitelist.lookup(msg._.from))
       msg.allow('sender in whitelist');
@@ -45,7 +51,7 @@ const FILTERS = [
     if (friends.length > 0) msg.allow('other recipient in whitelist');
   },
 
-  // Filters that deny should go after allow filters
+  // DENY filters
   (msg) => {
     if (!spamRegex) return;
 
@@ -120,16 +126,16 @@ const FILTERS = [
   },
 ];
 
+let _subjects = {};
+try {
+  _subjects = await getConfig(SUBJECTS_FILE);
+} catch (err) {
+  logger.log('Subjects file not loaded', err);
+}
+
 /**
  * Mark messages with duplicate subjects as spam
  */
-let _subjects = {};
-try {
-  _subjects = require(SUBJECTS_PATH);
-} catch (err) {
-  console.log('Subjects file not loaded');
-}
-
 function checkSubject(msg, spamIds) {
   const time = Date.now();
   const { uid } = msg;
@@ -145,7 +151,7 @@ function checkSubject(msg, spamIds) {
   // as spam
   if (last && last.uid != uid && time - last.time < SUBJECT_EXPIRY) {
     if (!msg._deny || !spamIds.has(last.uid))
-      console.log('(duplicate subject)', msg.subject);
+      logger.log('(duplicate subject)', msg.subject);
     spamIds.add(last.uid);
     spamIds.add(uid);
   }
@@ -159,7 +165,10 @@ async function writeSubjects(subjects) {
     if (time < now - SUBJECT_EXPIRY) delete subjects[k];
   }
 
-  await fs.writeFile(SUBJECTS_PATH, JSON.stringify(subjects, null, 2));
+  await fs.writeFile(
+    getConfigPath(SUBJECTS_FILE),
+    JSON.stringify(subjects, null, 2)
+  );
 }
 
 /**
@@ -169,17 +178,12 @@ let imap;
 async function main() {
   if (!imap) {
     try {
+      // Open imap connection
       imap = await connect();
-      imap.on('error', (err) => {
-        console.error('IMAP Error', err);
-        try {
-          if (imap) imap.end(imap);
-        } finally {
-          imap = null;
-        }
-      });
     } catch (err) {
-      console.error(`Failed to connect: ${colors.red(err.message)}`);
+      logger.log('IMAP connect() error', err.message);
+      imap?.end(imap);
+      imap = null;
       return;
     }
 
@@ -207,12 +211,11 @@ async function main() {
     */
   }
 
-  console.log('Loop start');
-  // process.stdout.write(`... done (sleeping)`);
+  // Load whitelist
   try {
     await whitelist.init();
   } catch (err) {
-    console.error('Failed to initialize whitelist', err);
+    logger.error('Failed to initialize whitelist', err);
   }
 
   if (!whitelist.addresses) {
@@ -235,7 +238,6 @@ async function main() {
   }
   uidNext = box.uidnext;
 
-  // console.log(`Checking messages [${ids}]`);
   if (ids.length > 0) {
     let loggedTime;
 
@@ -266,7 +268,7 @@ async function main() {
       });
 
       if (process.env.DEBUG) {
-        console.log(
+        logger.log(
           `DEBUG ${msg._allow || msg._deny}: (${msg._.from})${
             msg._.subject ? ` "${msg.subject}"` : ''
           }`
@@ -277,9 +279,9 @@ async function main() {
       if (!msg._allow) checkSubject(msg, spamIds);
 
       if (msg._deny) {
-        if (!loggedTime) console.log(new Date().toLocaleString());
+        if (!loggedTime) logger.log(new Date().toLocaleString());
         loggedTime = true;
-        console.log(
+        logger.log(
           `${msg._deny}: (${msg._.from})${
             msg._.subject ? ` "${msg.subject}"` : ''
           }`
@@ -306,29 +308,32 @@ async function main() {
   }
 
   await imap.closeBoxAsync(true);
-
-  console.log('Loop end');
 }
 
 process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT', err);
+  logger.error('UNCAUGHT', err);
   process.exit();
 });
 
 process.on('unhandledRejection', (err) => {
-  console.error('UNHANDLED', err);
+  logger.error('UNHANDLED', err);
   process.exit();
 });
 
 const delay = process.env.interval || config.interval || 1e3;
-console.log(`Starting loop with ${delay}ms delay`);
+logger.log(`Starting loop with ${delay}ms delay`);
 
 // eslint-disable-next-line no-constant-condition
 while (true) {
+  logger.tick('>');
+
   try {
     await main();
+    logger.tick('D');
   } catch (err) {
-    console.error(err);
+    logger.error('MAIN LOOP ERROR', err);
   }
+
+  logger.tick('<');
   await new Promise((resolve) => setTimeout(resolve, delay));
 }

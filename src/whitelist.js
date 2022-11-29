@@ -1,10 +1,15 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
-import { connect, fetchAndFilter, getRecipients } from './util.js';
+import {
+  connect,
+  fetchAndFilter,
+  getConfig,
+  getConfigPath,
+  getRecipients,
+} from './util.js';
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
+import logger from './GMaulLogger.js';
 
-const FILEPATH = path.join(__dirname, '../config/whitelist.json');
+const WHITELIST_FILE = '_whitelist.json';
 
 // eslint-disable-next-line no-unused-vars
 function line(str) {
@@ -13,9 +18,8 @@ function line(str) {
 }
 
 class Addresses {
-  static async load(filePath) {
-    const data = await fs.readFile(filePath, 'utf8');
-    return new Addresses(JSON.parse(data).addresses);
+  static async load() {
+    return new Addresses(await getConfig(WHITELIST_FILE));
   }
 
   constructor(addresses) {
@@ -98,15 +102,15 @@ async function processInbox(imap, addresses, bySize = []) {
       const domain = address.split('@')[1].split('.').slice(-2).join('.').toLowerCase();
       domains[domain] = (domains[domain] || 0) + 1;
     } catch (err) {
-      console.error('Invalid domain', address);
+      logger.error('Invalid domain', address);
     }
   });
   Object.entries(domains)
     .sort((a, b) => b[1] - a[1])
-    .forEach(e => console.log);
+    .forEach(e => logger.log);
   */
 
-  console.log('Done with Inbox');
+  logger.log('Done with Inbox');
 
   await imap.closeBoxAsync(false);
 
@@ -133,7 +137,7 @@ async function processSent(imap, addresses, bySize = []) {
     }
   });
 
-  console.log('Done with Sent');
+  logger.log('Done with Sent');
 
   await imap.closeBoxAsync(false);
 
@@ -144,18 +148,18 @@ export default {
   async init() {
     if (this._generating) return;
     try {
-      const stats = await fs.stat(FILEPATH);
+      const stats = await fs.stat(getConfigPath(WHITELIST_FILE));
       if (Date.now() - stats.mtime > 864e5) {
-        console.log('Updating whitelist');
+        logger.log('Updating whitelist');
         await this.generate();
-        console.log('Updated whitelist');
+        logger.log('Updated whitelist');
       }
-      this.addresses = await Addresses.load(FILEPATH);
+      this.addresses = await Addresses.load();
     } catch (err) {
       if (err.code == 'ENOENT') {
-        console.log('Generating whitelist (This may take a few minutes)');
+        logger.log('Generating whitelist (This may take a few minutes)');
         await this.generate();
-        console.log('Created whitelist');
+        logger.log('Created whitelist');
       } else {
         throw err;
       }
@@ -178,7 +182,7 @@ export default {
     await this._generating;
     this._generating = null;
 
-    await addresses.save(FILEPATH);
+    await addresses.save(getConfigPath(WHITELIST_FILE));
     this.addresses = addresses;
 
     bySize.sort((a, b) => {
@@ -189,7 +193,7 @@ export default {
 
     // Log largest messages
     // for (const msg in bySize) {
-    // console.log(msg.size, msg.subject);
+    // logger.log(msg.size, msg.subject);
     // }
   },
 };
