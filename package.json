@@ -2,19 +2,20 @@
   "name": "gmaul",
   "version": "1.0.0",
   "description": "A little agent for doing stuff with GMail",
-  "main": "gmaul.js",
+  "type": "module",
+  "bin": {
+    "gmaul": "./bin/agent.js"
+  },
   "dependencies": {
-    "@broofa/asyncproxy": "1.0.4",
-    "@broofa/stringlang": "1.0.3",
+    "@broofa/asyncproxy": "^1.0.6",
+    "@broofa/stringlang": "^3.0.0",
     "colors": "1.4.0",
-    "html-to-text": "5.1.1",
     "imap": "0.8.19",
-    "language-detect": "1.1.0",
-    "mailparser2": "1.0.0",
-    "terminal-kit": "1.33.15"
+    "mailparser2": "1.0.0"
   },
   "devDependencies": {
-    "eslint": "6.8.0"
+    "eslint": "^8.28.0",
+    "eslint-config-prettier": "^8.5.0"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 
-const StringLang = require('@broofa/stringlang');
-const colors = require('colors');
-const fs = require('fs').promises;
-const path = require('path');
-const util = require('./lib/util');
-const whitelist = require('./lib/whitelist');
-const { URL } = require('url');
-const chalk = require('chalk');
+import { unicodeBlockCount } from '@broofa/stringlang';
+import colors from 'colors';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {
+  connect,
+  fetchAndFilter,
+  getConfig,
+  getRecipients,
+} from './lib/util.js';
+import whitelist from './lib/whitelist.js';
 
-const CONFIG_PATH = path.join(__dirname, 'config/gmaul');
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
+
 const SUBJECTS_PATH = path.join(__dirname, 'config/_subjects.json');
 const SUBJECT_EXPIRY = 3600e3;
 
-const config = require(CONFIG_PATH);
+const config = await getConfig();
 
 // List of user addresses
 const userAliases = [config.server.user, ...config.aliases];
@@ -29,23 +33,22 @@ let uidNext;
 // ORDER HERE IS IMPORTANT
 const FILTERS = [
   // Filters that allow should go first
-  msg => {
+  (msg) => {
     if (msg._.from && whitelist.lookup(msg._.from))
       msg.allow('sender in whitelist');
   },
-  msg => {
+  (msg) => {
     // Allow emails sent to someone we've corresponded with
     const friends = msg._.emails.filter(
-      e => !/broofa/i.test(e) && whitelist.lookup(e)
+      (e) => !/broofa/i.test(e) && whitelist.lookup(e)
     );
     if (friends.length > 0) msg.allow('other recipient in whitelist');
   },
 
   // Filters that deny should go after allow filters
-  msg => {
+  (msg) => {
     if (!spamRegex) return;
-    const regex =
-      /\b((?:market|opportunit|campaign|seo|pric|ppe|sanitiz|mask|fintech)\w*)/i;
+
     if (spamRegex.test(msg._.from))
       msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
     if (spamRegex.test(msg._.fromName))
@@ -53,65 +56,65 @@ const FILTERS = [
     if (spamRegex.test(msg._.subject))
       msg.deny(`spammy term: "${RegExp.$1}" (subject)`);
   },
-  msg => {
+  (msg) => {
     if (msg._.from.split(/\s+/).length > 2)
       msg.deny('too many words in sender');
   },
-  msg => {
-    const prop = ['name', 'address'].find(prop => {
+  (msg) => {
+    const prop = ['name', 'address'].find((prop) => {
       const v = msg.from.value[0][prop];
       return v && v.length > 5 && v.toUpperCase() == v;
     });
     if (prop) msg.deny(`All caps (${prop})`);
   },
-  msg => {
+  (msg) => {
     if (msg._.from && /(\.com\.tw)$/.test(msg._.from))
       msg.deny(`from domain ${RegExp.$1}`);
   },
-  msg => {
+  (msg) => {
     if (!msg._.subject) msg.deny('empty subject');
   },
-  msg => {
+  (msg) => {
     const ctype = msg.headers.get('content-type');
     const charset = ctype && ctype.params && ctype.params.charset;
 
     if (charset && charset.toLowerCase() != 'utf-8')
       msg.deny(`charset ${charset}`);
   },
-  msg => {
+  (msg) => {
     const name = msg._.fromName;
     if (name.length <= 1) return;
 
-    const sl = new StringLang(name);
+    const sl = unicodeBlockCount(name);
     if (name.length - sl.basicLatin > 0) msg.deny('non-latin chars (name)');
   },
-  msg => {
-    const sl = new StringLang(msg._.subject);
-    if (msg._.subject.length - sl.basicLatin > 0)
+  (msg) => {
+    const sl = unicodeBlockCount(msg._.subject);
+    if (msg._.subject.length - sl['Basic Latin'] > 0)
       msg.deny('non-latin chars (subject)');
   },
-  msg => {
+  (msg) => {
     if (msg._.emails.length <= 0) msg.deny('empty recipients');
   },
-  msg => {
-    if (!msg._.emails.find(e => userAliases.includes(e)))
+  (msg) => {
+    if (!msg._.emails.find((e) => userAliases.includes(e)))
       msg.deny('not sent to user');
   },
-  msg => {
+  (msg) => {
     // Spam comes from "foo###@gmail.com" address
     if (/\d\d@gmail.com/.test(msg._.from)) msg.deny('gmail## sender');
   },
-  msg => {
+  (msg) => {
     // Spam often sent to "foo###@gmail.com" addresses
-    const suspect = msg._.emails.filter(e => /\d\d@gmail.com/.test(e));
+    const suspect = msg._.emails.filter((e) => /\d\d@gmail.com/.test(e));
     if (suspect.length >= 2) msg.deny('gmail## recipients');
   },
-  msg => {
+  (msg) => {
     if (/^(?:\w[\w-]+\w\.)+(?:com)$/i.test(msg._.subject))
       msg.deny('subject is domain');
   },
-  msg => {
-    const user = msg._.emails.find(e => userAliases.includes(e.address));
+  (msg) => {
+    const user = msg._.emails.find((e) => userAliases.includes(e.address));
     if (user && user.name && !config.nameRegex.test(user.name))
       msg.deny('user email but not user name');
   },
@@ -166,8 +169,8 @@ let imap;
 async function main() {
   if (!imap) {
     try {
-      imap = await util.connect();
-      imap.on('error', err => {
+      imap = await connect();
+      imap.on('error', (err) => {
         console.error('IMAP Error', err);
         try {
           if (imap) imap.end(imap);
@@ -187,7 +190,6 @@ async function main() {
       if (!boxes) return;
       for (const [name, box] of Object.entries(boxes)) {
         const boxPath = `${prefix ? `${prefix}${box.delimiter}` : ''}${name}`;
-        console.log(`${chalk.bold(boxPath)} (${box.attribs})`);
         logBoxes(box.children, boxPath);
       }
     }
@@ -239,7 +241,7 @@ async function main() {
 
     // For each message ...
     const spamIds = new Set();
-    const filteredIds = await util.fetchAndFilter(imap, ids, (msg, i) => {
+    const filteredIds = await fetchAndFilter(imap, ids, (msg) => {
       // Fetch will return the last message, even if it's uid is less than the
       // range requested (wtf?!?), so we throw those away here.
       if (msg.uid < lastUid) return;
@@ -248,17 +250,17 @@ async function main() {
       msg._ = {
         from: msg.from.value[0].address.toLowerCase(),
         fromName: msg.from.value[0].name.toLowerCase(),
-        emails: util.getRecipients(msg),
+        emails: getRecipients(msg),
         subject: msg.subject
           ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
           : '',
       };
 
-      msg.allow = status => (msg._allow = status);
-      msg.deny = status => (msg._deny = status);
+      msg.allow = (status) => (msg._allow = status);
+      msg.deny = (status) => (msg._deny = status);
 
       // Apply each filter
-      FILTERS.forEach(filter => {
+      FILTERS.forEach((filter) => {
         if (!filter || msg._allow || msg._deny) return;
         filter(msg);
       });
@@ -308,24 +310,25 @@ async function main() {
   console.log('Loop end');
 }
 
-process.on('uncaughtException', err => {
+process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT', err);
   process.exit();
 });
 
-process.on('unhandledRejection', err => {
+process.on('unhandledRejection', (err) => {
   console.error('UNHANDLED', err);
   process.exit();
 });
 
-const loop = async () => {
+const delay = process.env.interval || config.interval || 1e3;
+console.log(`Starting loop with ${delay}ms delay`);
+
+// eslint-disable-next-line no-constant-condition
+while (true) {
   try {
     await main();
   } catch (err) {
     console.error(err);
-  } finally {
-    setTimeout(loop, process.env.interval || config.interval || 1e3);
   }
-};
-
-loop();
+  await new Promise((resolve) => setTimeout(resolve, delay));
+}
