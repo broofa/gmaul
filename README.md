@@ -1,26 +1,3 @@
-# launchd
+# GMaul - A gmail agent for dealing with spam that Google doesn't catch
 
-MacOS will want something like this:
-```
-```
-
-# systemd
-
-Linux will want something like this:
-
-```
-[Unit]
-Description=Robert's GMail agent
-After=network.target
-
-[Service]
-Type=simple
-Restart=always
-RestartSec=5
-User=pi
-Environment=TIMER=60000
-ExecStart=/usr/bin/env node /Users/kieffer/projects/gmaul
-
-[Install]
-WantedBy=multi-user.target
-```
+'Haven't really set this up for public consumption yet, but if you're interested in using it open an issue and we can talk there.
