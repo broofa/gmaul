@@ -63,7 +63,7 @@ function* getAddresses(field) {
     } else if (add.group) {
       yield* getAddresses(add.group);
     } else {
-      throw Error('No address found');
+      logger.log('No address found in', add);
     }
   }
 }
