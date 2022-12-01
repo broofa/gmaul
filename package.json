@@ -1,25 +1,32 @@
 {
+  "author": "Robert Kieffer",
   "name": "gmaul",
   "version": "1.0.0",
   "description": "A little agent for doing stuff with GMail",
   "type": "module",
   "bin": {
-    "gmaul": "./bin/agent.js"
+    "gmaul": "./dist/cli.js"
   },
   "dependencies": {
     "@broofa/asyncproxy": "^1.0.6",
     "@broofa/stringlang": "^3.0.0",
     "colors": "1.4.0",
     "imap": "0.8.19",
-    "mailparser2": "1.0.0"
+    "mailparser": "^3.5.0"
   },
   "devDependencies": {
+    "@types/imap": "^0.8.35",
+    "@types/mailparser": "^3.4.0",
+    "@types/node": "^18.11.10",
     "eslint": "^8.28.0",
-    "eslint-config-prettier": "^8.5.0"
+    "eslint-config-prettier": "^8.5.0",
+    "typescript": "^4.9.3"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "watch": "nodemon --watch dist dist/cli.js",
+    "start": "./dist/cli.js"
   },
-  "author": "",
   "license": "ISC"
 }

@@ -5,37 +5,73 @@ import fs from 'node:fs/promises';
 import {
   connect,
   fetchAndFilter,
+  getAddress,
   getConfig,
   getConfigPath,
   getRecipients,
-} from './src/util.js';
-import whitelist from './src/whitelist.js';
+  GMaulAddress,
+  GMaulConnection,
+  GMaulParsedMail,
+} from './util.js';
+import whitelist from './whitelist.js';
 
-import logger from './src/GMaulLogger.js';
+import logger from './GMaulLogger.js';
 
-// DEBUG HOW PROCESS IS EXITING
-const origExit = process.exit;
-process.exit = function (code) {
-  console.trace('EXITING WITH CODE', code);
-  origExit(code);
+type MessageInfo = {
+  from: string;
+  fromName: string;
+  recipients: string[];
+  subject: string;
 };
+
+type GMaulMessage = GMaulParsedMail & {
+  allow: (why: string) => void;
+  deny: (why: string) => void;
+  _allow?: boolean;
+  _deny?: boolean;
+  _: {
+    from: string;
+    fromName: string;
+    recipients: GMaulAddress[];
+    subject: string;
+  };
+};
+
+type FilterFunction = (msg: GMaulMessage) => void;
+
+function isAllCaps(v?: string) {
+  return v && v.length > 5 && v === v.toUpperCase();
+}
 
 const SUBJECTS_FILE = '_subjects.json';
 const SUBJECT_EXPIRY = 3600e3;
 
 const config = await getConfig();
 
-// List of user addresses
-const userAliases = [config.server.user, ...config.aliases];
+function includesUserEmail(str: string) {
+  str = str.toLowerCase();
+  for (const email of config.emails) {
+    if (str.includes(email)) return true;
+  }
+  return false;
+}
+
+function includesUserName(str: string) {
+  str = str.toLowerCase();
+  for (const name of config.names) {
+    if (str.includes(name)) return true;
+  }
+  return false;
+}
 
 // Spammy term regex
 const spamRegex =
   config.spamTerms &&
   new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
 
-let uidNext;
+let uidNext = 0;
 
-const FILTERS = [
+const FILTERS: FilterFunction[] = [
   // ORDER HERE IS IMPORTANT
 
   // ALLOW filters (go before DENY)
@@ -45,10 +81,9 @@ const FILTERS = [
   },
   (msg) => {
     // Allow emails sent to someone we've corresponded with
-    const friends = msg._.emails.filter(
-      (e) => !/broofa/i.test(e) && whitelist.lookup(e)
-    );
-    if (friends.length > 0) msg.allow('other recipient in whitelist');
+    if (msg._.recipients.some((e) => whitelist.lookup(e.address))) {
+      msg.allow('recipient(s) are whitelisted');
+    }
   },
 
   // DENY filters
@@ -67,11 +102,9 @@ const FILTERS = [
       msg.deny('too many words in sender');
   },
   (msg) => {
-    const prop = ['name', 'address'].find((prop) => {
-      const v = msg.from.value[0][prop];
-      return v && v.length > 5 && v.toUpperCase() == v;
-    });
-    if (prop) msg.deny(`All caps (${prop})`);
+    const { name, address } = getAddress(msg.from) ?? {};
+    if (isAllCaps(name)) msg.deny(`All caps (name)`);
+    if (isAllCaps(address)) msg.deny(`All caps (address)`);
   },
   (msg) => {
     if (msg._.from && /(\.com\.tw)$/.test(msg._.from))
@@ -82,10 +115,9 @@ const FILTERS = [
   },
   (msg) => {
     const ctype = msg.headers.get('content-type');
-    const charset = ctype && ctype.params && ctype.params.charset;
-
-    if (charset && charset.toLowerCase() != 'utf-8')
-      msg.deny(`charset ${charset}`);
+    // @ts-ignore HeaderValue is complicated enough it's writing type-checking logic
+    const charset: string = ctype?.params?.charset?.toLowerCase();
+    if (charset && charset != 'utf-8') msg.deny(`charset ${charset}`);
   },
   (msg) => {
     const name = msg._.fromName;
@@ -100,10 +132,10 @@ const FILTERS = [
       msg.deny('non-latin chars (subject)');
   },
   (msg) => {
-    if (msg._.emails.length <= 0) msg.deny('empty recipients');
+    if (msg._.recipients.length <= 0) msg.deny('empty recipients');
   },
   (msg) => {
-    if (!msg._.emails.find((e) => userAliases.includes(e)))
+    if (!msg._.recipients.find((e) => includesUserEmail(e.address)))
       msg.deny('not sent to user');
   },
   (msg) => {
@@ -112,7 +144,9 @@ const FILTERS = [
   },
   (msg) => {
     // Spam often sent to "foo###@gmail.com" addresses
-    const suspect = msg._.emails.filter((e) => /\d\d@gmail.com/.test(e));
+    const suspect = msg._.recipients.filter((e) =>
+      /\d\d@gmail.com/.test(e.address)
+    );
     if (suspect.length >= 2) msg.deny('gmail## recipients');
   },
   (msg) => {
@@ -120,15 +154,20 @@ const FILTERS = [
       msg.deny('subject is domain');
   },
   (msg) => {
-    const user = msg._.emails.find((e) => userAliases.includes(e.address));
-    if (user && user.name && !config.nameRegex.test(user.name))
+    const user = msg._.recipients.find((e) => includesUserEmail(e.address));
+    if (user?.name && !includesUserName(user.name))
       msg.deny('user email but not user name');
   },
 ];
 
-let _subjects = {};
+type SubjectInfo = {
+  time: number;
+  uid: ImapUID;
+};
+
+let _subjects: Record<string, SubjectInfo> = {};
 try {
-  _subjects = await getConfig(SUBJECTS_FILE);
+  _subjects = await getConfig<Record<string, SubjectInfo>>(SUBJECTS_FILE);
 } catch (err) {
   logger.log('Subjects file not loaded', err);
 }
@@ -136,7 +175,7 @@ try {
 /**
  * Mark messages with duplicate subjects as spam
  */
-function checkSubject(msg, spamIds) {
+function checkSubject(msg: GMaulMessage, spamIds: Set<ImapUID>) {
   const time = Date.now();
   const { uid } = msg;
   let { subject = '' } = msg;
@@ -158,7 +197,7 @@ function checkSubject(msg, spamIds) {
   _subjects[subject] = { time, uid };
 }
 
-async function writeSubjects(subjects) {
+async function writeSubjects(subjects: Record<string, SubjectInfo>) {
   // Purge stale entries
   const now = Date.now();
   for (const [k, { time }] of Object.entries(subjects)) {
@@ -174,16 +213,16 @@ async function writeSubjects(subjects) {
 /**
  * Main entry point
  */
-let imap;
+let imap: GMaulConnection | undefined;
 async function main() {
   if (!imap) {
     try {
       // Open imap connection
       imap = await connect();
     } catch (err) {
-      logger.log('IMAP connect() error', err.message);
-      imap?.end(imap);
-      imap = null;
+      logger.log('IMAP connect() error', (err as Error).message);
+      imap?.end();
+      imap = undefined;
       return;
     }
 
@@ -225,72 +264,72 @@ async function main() {
   // Open INBOX (read-write)
   const box = await imap.openBoxAsync('INBOX', false);
 
-  let ids;
+  let ids: ImapUID[];
   const lastUid = uidNext || 0;
   if (uidNext) {
     // Get messages since last
     ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
   } else {
     // First time through, get messages for the past week
-    const days = process.env.DAYS || 7;
+    const days = process.env.DAYS ? parseInt(process.env.DAYS) : 7;
     const since = new Date(Date.now() - days * 864e5);
     ids = await imap.searchAsync(['UNSEEN', ['SINCE', since.toDateString()]]);
   }
   uidNext = box.uidnext;
 
   if (ids.length > 0) {
-    let loggedTime;
+    let loggedTime = false;
 
     // For each message ...
-    const spamIds = new Set();
-    const filteredIds = await fetchAndFilter(imap, ids, (msg) => {
+    const spamIds: Set<ImapUID> = new Set();
+
+    const filteredIds = await fetchAndFilter(imap, ids.map(String), (msg) => {
       // Fetch will return the last message, even if it's uid is less than the
       // range requested (wtf?!?), so we throw those away here.
-      if (msg.uid < lastUid) return;
+      if (msg.uid < lastUid) return false;
 
-      // Pull together useful message state for filters
-      msg._ = {
-        from: msg.from.value[0].address.toLowerCase(),
-        fromName: msg.from.value[0].name.toLowerCase(),
-        emails: getRecipients(msg),
-        subject: msg.subject
-          ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
-          : '',
-      };
+      const from = getAddress(msg.from);
 
-      msg.allow = (status) => (msg._allow = status);
-      msg.deny = (status) => (msg._deny = status);
-
-      // Apply each filter
-      FILTERS.forEach((filter) => {
-        if (!filter || msg._allow || msg._deny) return;
-        filter(msg);
+      // Build enhanced message object
+      const gMsg: GMaulMessage = Object.assign(Object.create(msg), {
+        _allow: undefined as undefined | string,
+        _deny: undefined as undefined | string,
+        _: {
+          from: from?.address.toLowerCase(),
+          fromName: from?.name?.toLowerCase(),
+          recipients: getRecipients(msg),
+          subject: msg.subject
+            ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
+            : '',
+        },
+        allow(status: string) {
+          this._allow = status;
+        },
+        deny(status: string) {
+          this._deny = status;
+        },
       });
 
-      if (process.env.DEBUG) {
-        logger.log(
-          `DEBUG ${msg._allow || msg._deny}: (${msg._.from})${
-            msg._.subject ? ` "${msg.subject}"` : ''
-          }`
-        );
-      }
+      // Apply each filter
+      FILTERS.find((filter) => {
+        filter?.(gMsg);
+        return gMsg._deny || gMsg._allow;
+      });
 
       // Check for messages w/ duplicate subjects
-      if (!msg._allow) checkSubject(msg, spamIds);
+      if (!gMsg._allow) checkSubject(gMsg, spamIds);
 
-      if (msg._deny) {
+      if (gMsg._deny) {
         if (!loggedTime) logger.log(new Date().toLocaleString());
         loggedTime = true;
         logger.log(
-          `${msg._deny}: (${msg._.from})${
-            msg._.subject ? ` "${msg.subject}"` : ''
+          `${gMsg._deny}: (${gMsg._.from})${
+            gMsg._.subject ? ` "${gMsg.subject}"` : ''
           }`
         );
-
-        return msg.uid;
       }
 
-      return null;
+      return gMsg._deny ? true : false;
     });
 
     await writeSubjects(_subjects);
@@ -320,20 +359,22 @@ process.on('unhandledRejection', (err) => {
   process.exit();
 });
 
-const delay = process.env.interval || config.interval || 1e3;
+const delay = process.env.interval
+  ? Number(process.env.interval)
+  : config.interval ?? 1e3;
+
 logger.log(`Starting loop with ${delay}ms delay`);
 
 // eslint-disable-next-line no-constant-condition
 while (true) {
-  logger.tick('>');
+  logger.tick('-');
 
   try {
     await main();
-    logger.tick('D');
   } catch (err) {
     logger.error('MAIN LOOP ERROR', err);
   }
 
-  logger.tick('<');
+  logger.tick('.');
   await new Promise((resolve) => setTimeout(resolve, delay));
 }

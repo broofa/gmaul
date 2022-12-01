@@ -5,19 +5,18 @@ export class GmaulLogger {
     process.stdout.write(char);
     this.#ticked = true;
   }
-  s;
 
   untick() {
     if (this.#ticked) process.stdout.write('\n');
     this.#ticked = false;
   }
 
-  log(...args) {
+  log(...args: any[]) {
     this.untick();
     console.log(...args);
   }
 
-  error(...args) {
+  error(...args: any[]) {
     this.untick();
     console.error(...args);
   }
