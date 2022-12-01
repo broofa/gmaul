@@ -80,9 +80,14 @@ const FILTERS: FilterFunction[] = [
       msg.allow('sender in whitelist');
   },
   (msg) => {
+    const knownRecipient = msg._.recipients.find((e) => {
+      if (includesUserEmail(e.address)) return false;
+      return whitelist.lookup(e.address);
+    });
+
     // Allow emails sent to someone we've corresponded with
-    if (msg._.recipients.some((e) => whitelist.lookup(e.address))) {
-      msg.allow('recipient(s) are whitelisted');
+    if (knownRecipient) {
+      msg.allow(`known recipient (${knownRecipient.address})`);
     }
   },
 
@@ -143,7 +148,7 @@ const FILTERS: FilterFunction[] = [
     if (/\d\d@gmail.com/.test(msg._.from)) msg.deny('gmail## sender');
   },
   (msg) => {
-    // Spam often sent to "foo###@gmail.com" addresses
+    // Spam often includes "foo###@gmail.com" in other recipients
     const suspect = msg._.recipients.filter((e) =>
       /\d\d@gmail.com/.test(e.address)
     );
@@ -333,7 +338,6 @@ async function main() {
     });
 
     await writeSubjects(_subjects);
-
     for (const id of filteredIds) spamIds.add(id);
 
     if (spamIds.size) {

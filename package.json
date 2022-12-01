@@ -23,7 +23,7 @@
     "typescript": "^4.9.3"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod a+x dist/cli.js",
     "build:watch": "tsc --watch",
     "watch": "nodemon --watch dist dist/cli.js",
     "start": "./dist/cli.js"
