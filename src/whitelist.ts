@@ -7,12 +7,10 @@ import {
   getConfigPath,
   getRecipients,
   GMaulConnection,
-  GMaulParsedMail,
 } from './util.js';
 
 import logger from './GMaulLogger.js';
-
-const WHITELIST_FILE = '_whitelist.json';
+import { GMaulParsedMail } from 'cli.js';
 
 type ActivityCounts = {
   [email: string]: {
@@ -22,6 +20,16 @@ type ActivityCounts = {
     inboxDate?: Date;
   };
 };
+
+export interface Whitelist {
+  addresses?: Addresses;
+  _generating?: Promise<any>;
+  init(): Promise<void>;
+  lookup(email: string): ActivityCounts[string];
+  generate(): Promise<void>;
+}
+
+const WHITELIST_FILE = '_whitelist.json';
 
 // eslint-disable-next-line no-unused-vars
 function line(str: string) {
@@ -169,14 +177,6 @@ async function processSent(
   await imap.closeBoxAsync(false);
 
   imap.end();
-}
-
-interface Whitelist {
-  addresses?: Addresses;
-  _generating?: Promise<any>;
-  init(): Promise<void>;
-  lookup(email: string): ActivityCounts[string];
-  generate(): Promise<void>;
 }
 
 export default {

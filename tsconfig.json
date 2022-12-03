@@ -10,9 +10,6 @@
     "strict": true,
     "sourceMap": true,
     "rootDir": "./src",
-    "skipLibCheck": true
-  },
-  "include": [
-    "**/*.ts"
-  ],
+    "skipLibCheck": true,
+  }
 }

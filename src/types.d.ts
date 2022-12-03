@@ -1,4 +1,3 @@
-
 declare module '@broofa/stringlang' {
   export function unicodeBlockCount(str: string): Record<string, number>;
 }
@@ -8,3 +7,8 @@ declare module '@broofa/asyncproxy' {
 }
 
 type ImapUID = number;
+
+type GMaulAddress = {
+  address: string;
+  name?: string;
+};

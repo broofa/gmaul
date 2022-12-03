@@ -1,6 +1,13 @@
 /* eslint-disable no-unused-vars */
 import asyncProxy from '@broofa/asyncproxy';
-import Imap, { Box, ImapMessage, ImapMessageAttributes } from 'imap';
+import { GMaulConfig, GMaulParsedMail } from 'cli.js';
+import {
+  Box,
+  default as Connection,
+  default as Imap,
+  ImapMessage,
+  ImapMessageAttributes,
+} from 'imap';
 import {
   AddressObject,
   EmailAddress,
@@ -9,10 +16,7 @@ import {
 } from 'mailparser';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-
 import logger from './GMaulLogger.js';
-
-import Connection, { Config } from 'imap';
 
 // Declare promisified versions of methods that we call via asyncproxy
 export interface GMaulConnection extends Connection {
@@ -25,21 +29,6 @@ export interface GMaulConnection extends Connection {
   ): Promise<void>;
 }
 
-export interface GMaulParsedMail extends ParsedMail {
-  uid: number;
-  size: number;
-}
-
-type GMaulConfig = {
-  allowTerms: string[];
-  emails: string[];
-  names: string[];
-  interval: number;
-  server: Config;
-  spamTerms: string[];
-  trash: string;
-};
-
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const CONFIG_DIR = 'config';
 const CONFIG_FILE = 'gmaul.json';
@@ -48,17 +37,17 @@ export function getConfigPath(filename: string) {
   return path.join(__dirname, '..', CONFIG_DIR, filename);
 }
 
-function isAddressObject(obj: object): obj is AddressObject {
+export function isAddressObject(obj: object): obj is AddressObject {
   return 'value' in obj;
 }
-function isEmailAddress(obj: object): obj is EmailAddress {
+
+export function isEmailAddress(obj: object): obj is EmailAddress {
   return 'address' in obj;
 }
 
-export type GMaulAddress = {
-  address: string;
-  name?: string;
-};
+export function isAllCaps(v?: string) {
+  return v && v.length > 5 && v === v.toUpperCase();
+}
 
 // Get all emails from AddressObject
 export function getAddresses(
