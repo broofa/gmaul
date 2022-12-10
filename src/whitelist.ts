@@ -1,16 +1,10 @@
 import fs from 'node:fs/promises';
-import {
-  connect,
-  fetchAndFilter,
-  getAddress,
-  getConfig,
-  getConfigPath,
-  getRecipients,
-  GMaulConnection,
-} from './util.js';
+import { fetchAndFilter, getAddress, getRecipients } from './util.js';
 
-import logger from './GMaulLogger.js';
-import { GMaulParsedMail } from 'cli.js';
+import { GMaulParsedMail } from './cli.js';
+import { getConfigPath, GMaulConfig, readFile } from './config.js';
+import { connect, GMaulConnection } from './connection.js';
+import { logger } from './logger.js';
 
 type ActivityCounts = {
   [email: string]: {
@@ -22,9 +16,10 @@ type ActivityCounts = {
 };
 
 export interface Whitelist {
+  config?: GMaulConfig;
   addresses?: Addresses;
   _generating?: Promise<any>;
-  init(): Promise<void>;
+  init(config: GMaulConfig): Promise<void>;
   lookup(email: string): ActivityCounts[string];
   generate(): Promise<void>;
 }
@@ -39,7 +34,7 @@ function line(str: string) {
 
 class Addresses {
   static async load() {
-    const whitelist = await getConfig<{ addresses: ActivityCounts }>(
+    const whitelist = await readFile<{ addresses: ActivityCounts }>(
       WHITELIST_FILE
     );
 
@@ -123,22 +118,6 @@ async function processInbox(
     return true;
   });
 
-  // Count senders by TLD
-  /*
-  const domains = {};
-  Object.keys(addresses).forEach(address => {
-    try {
-      const domain = address.split('@')[1].split('.').slice(-2).join('.').toLowerCase();
-      domains[domain] = (domains[domain] || 0) + 1;
-    } catch (err) {
-      logger.error('Invalid domain', address);
-    }
-  });
-  Object.entries(domains)
-    .sort((a, b) => b[1] - a[1])
-    .forEach(e => logger.log);
-  */
-
   logger.log('Done with Inbox');
 
   await imap.closeBoxAsync(false);
@@ -160,7 +139,6 @@ async function processSent(
 
   const range = `${1}:*`;
 
-  // Get messages that don't have a subject
   await fetchAndFilter(imap, range, (msg, i) => {
     if (i % 100 == 0) line(`${box.name}: ${i} of ${box.messages.total}`);
     if (msg.size > 1e6) bySize.push(msg);
@@ -183,7 +161,8 @@ export default {
   addresses: undefined,
   _generating: undefined,
 
-  async init() {
+  async init(config: GMaulConfig) {
+    this.config = config;
     if (this._generating) return;
     try {
       const stats = await fs.stat(getConfigPath(WHITELIST_FILE));
@@ -209,14 +188,33 @@ export default {
     return this.addresses.lookup(...args);
   },
 
-  async generate() {
+  async generate(config: GMaulConfig) {
+    if (!this.config) {
+      throw Error('Whitelist not initialized');
+    }
     if (this._generating) return null;
 
     const addresses = new Addresses();
     const bySize: GMaulParsedMail[] = [];
     this._generating = Promise.all([
-      connect().then((imap) => processSent(imap, addresses, bySize)),
-      connect().then((imap) => processInbox(imap, addresses, bySize)),
+      connect(
+        this.config,
+        {
+          async ready(imap) {
+            await processSent(imap, addresses, bySize);
+          },
+        },
+        false
+      ),
+      connect(
+        this.config,
+        {
+          async ready(imap) {
+            await processInbox(imap, addresses, bySize);
+          },
+        },
+        false
+      ),
     ]);
     await this._generating;
     this._generating = undefined;

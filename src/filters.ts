@@ -1,14 +1,19 @@
 import { unicodeBlockCount } from '@broofa/stringlang';
-import { GMaulConfig, GMaulMessage } from './cli.js';
+import { GMaulConfig } from 'config.js';
+import { GMaulMessage } from './cli.js';
 import { getAddress, isAllCaps } from './util.js';
 import { Whitelist } from './whitelist.js';
 
 export type FilterFunction = (msg: GMaulMessage) => void;
 
-export function getFilters(config: GMaulConfig, whitelist: Whitelist) {
-  const spamRegex =
-    config.spamTerms &&
-    new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
+export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
+  const whitelistRegex =
+    config.whitelist &&
+    new RegExp(`\\b((?:${config.whitelist.join('|')})\\w*)`, 'i');
+
+  const blacklistRegex =
+    config.blacklist &&
+    new RegExp(`\\b((?:${config.blacklist.join('|')})\\w*)`, 'i');
 
   function includesUserEmail(str: string) {
     str = str.toLowerCase();
@@ -31,6 +36,17 @@ export function getFilters(config: GMaulConfig, whitelist: Whitelist) {
 
     // ALLOW filters (go before DENY)
     (msg) => {
+      if (!whitelistRegex) return;
+
+      if (whitelistRegex.test(msg._.from))
+        msg.allow(`whitelisted: "${RegExp.$1}" (sender email)`);
+      if (whitelistRegex.test(msg._.fromName))
+        msg.allow(`whitelisted: "${RegExp.$1}" (sender name)`);
+      if (whitelistRegex.test(msg._.subject))
+        msg.allow(`whitelisted: "${RegExp.$1}" (subject)`);
+    },
+
+    (msg) => {
       if (msg._.from && whitelist.lookup(msg._.from))
         msg.allow('sender in whitelist');
     },
@@ -48,13 +64,13 @@ export function getFilters(config: GMaulConfig, whitelist: Whitelist) {
 
     // DENY filters
     (msg) => {
-      if (!spamRegex) return;
+      if (!blacklistRegex) return;
 
-      if (spamRegex.test(msg._.from))
+      if (blacklistRegex.test(msg._.from))
         msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
-      if (spamRegex.test(msg._.fromName))
+      if (blacklistRegex.test(msg._.fromName))
         msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
-      if (spamRegex.test(msg._.subject))
+      if (blacklistRegex.test(msg._.subject))
         msg.deny(`spammy term: "${RegExp.$1}" (subject)`);
     },
     (msg) => {

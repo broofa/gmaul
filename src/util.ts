@@ -1,41 +1,13 @@
 /* eslint-disable no-unused-vars */
-import asyncProxy from '@broofa/asyncproxy';
-import { GMaulConfig, GMaulParsedMail } from 'cli.js';
-import {
-  Box,
-  default as Connection,
-  default as Imap,
-  ImapMessage,
-  ImapMessageAttributes,
-} from 'imap';
+import { GMaulParsedMail } from 'cli.js';
+import { default as Imap, ImapMessage, ImapMessageAttributes } from 'imap';
 import {
   AddressObject,
   EmailAddress,
   ParsedMail,
   simpleParser,
 } from 'mailparser';
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import logger from './GMaulLogger.js';
-
-// Declare promisified versions of methods that we call via asyncproxy
-export interface GMaulConnection extends Connection {
-  openBoxAsync(mailboxName: string, openReadOnly?: boolean): Promise<Box>;
-  searchAsync(criteria: any[]): Promise<ImapUID[]>;
-  closeBoxAsync(autoExpunge?: boolean): Promise<void>;
-  moveAsync(
-    source: any /* MessageSource */,
-    mailboxName: string
-  ): Promise<void>;
-}
-
-const __dirname = path.dirname(new URL(import.meta.url).pathname);
-const CONFIG_DIR = 'config';
-const CONFIG_FILE = 'gmaul.json';
-
-export function getConfigPath(filename: string) {
-  return path.join(__dirname, '..', CONFIG_DIR, filename);
-}
+import { logger } from './logger.js';
 
 export function isAddressObject(obj: object): obj is AddressObject {
   return 'value' in obj;
@@ -85,15 +57,6 @@ export function getAddress(
   return addresses.length ? addresses[0] : undefined;
 }
 
-export async function getConfig<T = GMaulConfig>(
-  filename = 'gmaul.json'
-): Promise<T> {
-  const json = await fs.readFile(getConfigPath(filename), 'utf8');
-  return JSON.parse(json);
-}
-
-const config = await getConfig();
-
 function parseMessage(msg: ImapMessage) {
   return new Promise<GMaulParsedMail>((resolve, reject) => {
     let raw: string;
@@ -140,15 +103,6 @@ export function getBoxes() {
   });
   logger.log('Mailboxes', names);
   */
-}
-
-export function connect() {
-  return new Promise<GMaulConnection>((resolve, reject) => {
-    const imap = new Imap(config.server);
-    imap.once('ready', () => resolve(asyncProxy(imap) as GMaulConnection));
-    imap.once('error', reject);
-    imap.connect();
-  });
 }
 
 // export function search(imap : Imap, criteria) {

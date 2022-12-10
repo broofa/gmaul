@@ -22,4 +22,4 @@ export class GmaulLogger {
   }
 }
 
-export default new GmaulLogger();
+export const logger = new GmaulLogger();

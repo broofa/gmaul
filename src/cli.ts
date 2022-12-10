@@ -1,31 +1,13 @@
 #!/usr/bin/env node
 
-import fs from 'node:fs/promises';
-import {
-  connect,
-  fetchAndFilter,
-  getAddress,
-  getConfig,
-  getConfigPath,
-  getRecipients,
-  GMaulConnection,
-} from './util.js';
-import whitelist from './whitelist.js';
-
-import { Config } from 'imap';
 import { ParsedMail } from 'mailparser';
-import { getFilters } from './filters.js';
-import logger from './GMaulLogger.js';
-
-export type GMaulConfig = {
-  allowTerms: string[];
-  emails: string[];
-  names: string[];
-  interval: number;
-  server: Config;
-  spamTerms: string[];
-  trash: string;
-};
+import { initConfig } from './config.js';
+import { connect, GMaulConnection } from './connection.js';
+import { initFilters } from './filters.js';
+import { logger } from './logger.js';
+import { checkSubject, initSubjects, writeSubjects } from './subjects.js';
+import { fetchAndFilter, getAddress, getRecipients } from './util.js';
+import whitelist from './whitelist.js';
 
 export interface GMaulParsedMail extends ParsedMail {
   uid: number;
@@ -45,115 +27,17 @@ export type GMaulMessage = GMaulParsedMail & {
   };
 };
 
-const SUBJECTS_FILE = '_subjects.json';
-const SUBJECT_EXPIRY = 3600e3;
-
-const config = await getConfig();
-
-// Spammy term regex
-const spamRegex =
-  config.spamTerms &&
-  new RegExp(`\\b((?:${config.spamTerms.join('|')})\\w*)`, 'i');
+const config = await initConfig();
+await initSubjects(config);
+const filters = initFilters(config, whitelist);
 
 let uidNext = 0;
 
-const FILTERS = getFilters(config, whitelist);
-
-type SubjectInfo = {
-  time: number;
-  uid: ImapUID;
-};
-
-let foo: ParsedMail;
-
-let _subjects: Record<string, SubjectInfo> = {};
-try {
-  _subjects = await getConfig<Record<string, SubjectInfo>>(SUBJECTS_FILE);
-} catch (err) {
-  logger.log('Subjects file not loaded', err);
-}
-
-/**
- * Mark messages with duplicate subjects as spam
- */
-function checkSubject(msg: GMaulMessage, spamIds: Set<ImapUID>) {
-  const time = Date.now();
-  const { uid } = msg;
-  let { subject = '' } = msg;
-
-  subject = subject.toLowerCase().replace(/\d+/g, '').replace(/\W+/g, ' ');
-
-  if (!subject) return;
-
-  const last = _subjects[subject];
-
-  // If last message with this subject was seen < 1h ago, mark both messages
-  // as spam
-  if (last && last.uid != uid && time - last.time < SUBJECT_EXPIRY) {
-    if (!msg._deny || !spamIds.has(last.uid))
-      logger.log('(duplicate subject)', msg.subject);
-    spamIds.add(last.uid);
-    spamIds.add(uid);
-  }
-  _subjects[subject] = { time, uid };
-}
-
-async function writeSubjects(subjects: Record<string, SubjectInfo>) {
-  // Purge stale entries
-  const now = Date.now();
-  for (const [k, { time }] of Object.entries(subjects)) {
-    if (time < now - SUBJECT_EXPIRY) delete subjects[k];
-  }
-
-  await fs.writeFile(
-    getConfigPath(SUBJECTS_FILE),
-    JSON.stringify(subjects, null, 2)
-  );
-}
-
-/**
- * Main entry point
- */
-let imap: GMaulConnection | undefined;
-async function main() {
-  if (!imap) {
-    try {
-      // Open imap connection
-      imap = await connect();
-    } catch (err) {
-      logger.log('IMAP connect() error', (err as Error).message);
-      imap?.end();
-      imap = undefined;
-      return;
-    }
-
-    /*
-    // List mailboxes
-    const boxes = await imap.getBoxesAsync();
-    function logBoxes(boxes, prefix = '') {
-      if (!boxes) return;
-      for (const [name, box] of Object.entries(boxes)) {
-        const boxPath = `${prefix ? `${prefix}${box.delimiter}` : ''}${name}`;
-        logBoxes(box.children, boxPath);
-      }
-    }
-
-    logBoxes(boxes);
-    */
-
-    /*
-    // Note: This doesn't appear to work (possibly due to [GMAIL]/Spam folder
-    // having \Noselect option?)
-    const spam = await imap.openBoxAsync('[GMAIL]/Spam', true);
-    const since = new Date(Date.now() - 24 * 3600e3); // Previous day
-    ids = await imap.searchAsync([['SINCE', since.toDateString()]]);
-    await imap.closeBoxAsync();
-    */
-  }
-
+async function processMail(imap: GMaulConnection, numNewMessages = 0) {
+  logger.log('CHECKING');
   // Load whitelist
   try {
-    await whitelist.init();
+    await whitelist.init(config);
   } catch (err) {
     logger.error('Failed to initialize whitelist', err);
   }
@@ -212,7 +96,7 @@ async function main() {
       });
 
       // Apply each filter
-      FILTERS.find((filter) => {
+      filters.find((filter) => {
         filter?.(gMsg);
         return gMsg._deny || gMsg._allow;
       });
@@ -233,7 +117,7 @@ async function main() {
       return gMsg._deny ? true : false;
     });
 
-    await writeSubjects(_subjects);
+    await writeSubjects();
     for (const id of filteredIds) spamIds.add(id);
 
     if (spamIds.size) {
@@ -259,22 +143,12 @@ process.on('unhandledRejection', (err) => {
   process.exit();
 });
 
-const delay = process.env.interval
-  ? Number(process.env.interval)
-  : config.interval ?? 1e3;
+let imap: GMaulConnection | undefined;
+let reconnectTimer: NodeJS.Timeout | undefined;
 
-logger.log(`Starting loop with ${delay}ms delay`);
+logger.log('starting');
 
-// eslint-disable-next-line no-constant-condition
-while (true) {
-  logger.tick('-');
-
-  try {
-    await main();
-  } catch (err) {
-    logger.error('MAIN LOOP ERROR', err);
-  }
-
-  logger.tick('.');
-  await new Promise((resolve) => setTimeout(resolve, delay));
-}
+connect(config, {
+  ready: processMail,
+  mail: processMail,
+});
