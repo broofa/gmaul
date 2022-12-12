@@ -1,30 +1,22 @@
 import fs from 'node:fs/promises';
 import { fetchAndFilter, getAddress, getRecipients } from './util.js';
 
-import { GMaulParsedMail } from './cli.js';
 import { getConfigPath, GMaulConfig, readFile } from './config.js';
-import { connect, GMaulConnection } from './connection.js';
+import { connect } from './connection.js';
 import { logger } from './logger.js';
 
+type ActivityStats = {
+  sentCount: number;
+  sentDate?: Date;
+  inboxCount: number;
+  inboxDate?: Date;
+};
 type ActivityCounts = {
-  [email: string]: {
-    sentCount: number;
-    sentDate?: Date;
-    inboxCount: number;
-    inboxDate?: Date;
-  };
+  [email: string]: ActivityStats;
 };
 
-export interface Whitelist {
-  config?: GMaulConfig;
-  addresses?: Addresses;
-  _generating?: Promise<any>;
-  init(config: GMaulConfig): Promise<void>;
-  lookup(email: string): ActivityCounts[string];
-  generate(): Promise<void>;
-}
-
 const WHITELIST_FILE = '_whitelist.json';
+const BOX_MOD = 1000; // How often to update the spinner
 
 // eslint-disable-next-line no-unused-vars
 function line(str: string) {
@@ -85,148 +77,173 @@ class Addresses {
   }
 }
 
-async function processInbox(
-  imap: GMaulConnection,
-  addresses: Addresses,
-  bySize: GMaulParsedMail[]
-) {
-  // Open INBOX
-  const box = await imap.openBoxAsync('INBOX');
+export default class Whitelist {
+  addresses?: Addresses;
+  _generating?: Promise<any>;
 
-  // Get unseen message ids
-
-  let unseen = new Set(await imap.searchAsync(['UNSEEN']));
-
-  const range = `${1}:*`;
-  await fetchAndFilter(imap, range, (msg, i) => {
-    if (i % 100 == 0) line(`${box.name}: ${i} of ${box.messages.total}`);
-    if (msg.size > 1e6) bySize.push(msg);
-
-    // Don't use unseen messages in whitelist
-    if (unseen.has(msg.uid)) return false;
-
-    // Mark sender
-    const address = getAddress(msg.from);
-    if (address?.address) {
-      addresses.markAddress('inbox', address.address, msg.date);
-    }
-
-    // Mark recipients
-    const emails = getRecipients(msg);
-    for (let e of emails) addresses.markAddress('inbox', e.address, msg.date);
-
-    return true;
-  });
-
-  logger.log('Done with Inbox');
-
-  await imap.closeBoxAsync(false);
-
-  imap.end();
-}
-
-async function processSent(
-  imap: GMaulConnection,
-  addresses: Addresses,
-  bySize: GMaulParsedMail[]
-) {
-  // Open Sent Mail (read)
-  const box = await imap.openBoxAsync('[Gmail]/Sent Mail');
-
-  // Get UNSEEN messages since yesterday
-  // const days = process.env.DAYS || 1;
-  // const since = new Date(Date.now() - days * 864e5);
-
-  const range = `${1}:*`;
-
-  await fetchAndFilter(imap, range, (msg, i) => {
-    if (i % 100 == 0) line(`${box.name}: ${i} of ${box.messages.total}`);
-    if (msg.size > 1e6) bySize.push(msg);
-
-    for (let address of getRecipients(msg)) {
-      addresses.markAddress('sent', address.address, msg.date);
-    }
-
-    return false;
-  });
-
-  logger.log('Done with Sent');
-
-  await imap.closeBoxAsync(false);
-
-  imap.end();
-}
-
-export default {
-  addresses: undefined,
-  _generating: undefined,
-
-  async init(config: GMaulConfig) {
+  constructor(private config: GMaulConfig) {
     this.config = config;
-    if (this._generating) return;
+  }
+
+  async update() {
+    if (this._generating) {
+      return await this._generating;
+    }
+
     try {
+      // Update whitelist if it's older than a day
       const stats = await fs.stat(getConfigPath(WHITELIST_FILE));
       if (Date.now() - stats.mtime.getTime() > 864e5) {
-        logger.log('Updating whitelist');
+        logger.spin('Updating whitelist');
         await this.generate();
-        logger.log('Updated whitelist');
       }
-      this.addresses = await Addresses.load();
     } catch (err) {
+      // If whitelist doesn't exist, generate it
       if ((err as NodeJS.ErrnoException).code == 'ENOENT') {
-        logger.log('Generating whitelist (This may take a few minutes)');
+        logger.spin('Generating whitelist');
         await this.generate();
-        logger.log('Created whitelist');
       } else {
         throw err;
       }
     }
-  },
 
-  lookup(...args) {
+    logger.spin('Loading whitelist addresses');
+    this.addresses = await Addresses.load();
+  }
+
+  lookup(email: string) {
     if (!this.addresses) throw Error('Whitelist not initialized');
-    return this.addresses.lookup(...args);
-  },
+    return this.addresses.lookup(email);
+  }
 
-  async generate(config: GMaulConfig) {
-    if (!this.config) {
-      throw Error('Whitelist not initialized');
+  async scanInboxForWhitelist(addresses: Addresses): Promise<void> {
+    if (!this.config) throw Error('No config');
+    return new Promise((resolve, reject) => {
+      connect(
+        this.config,
+        {
+          async ready(imap) {
+            logger.log('Whitelist ingesting Sent Mail');
+
+            try {
+              // Open INBOX
+              const box = await imap.openBoxAsync('INBOX');
+
+              // Get unseen message ids
+              let unseen = new Set(await imap.searchAsync(['UNSEEN']));
+
+              const range = `${1}:*`;
+              await fetchAndFilter(imap, range, (msg, i) => {
+                if (i % BOX_MOD == 0) {
+                  logger.spin(`${box.name}: ${i} of ${box.messages.total}`);
+                }
+
+                // Mailing list?
+                if (msg?.headers.has('list')) {
+                  // logger.log('LIST', msg.from?.value[0]?.name, msg.subject);
+                }
+
+                // Don't use unseen messages in whitelist
+                if (unseen.has(msg.uid)) {
+                  return false;
+                }
+
+                // Mark sender
+                const address = getAddress(msg.from);
+                if (address?.address) {
+                  addresses.markAddress('inbox', address.address, msg.date);
+                }
+
+                // Mark recipients
+                const emails = getRecipients(msg);
+                for (let e of emails)
+                  addresses.markAddress('inbox', e.address, msg.date);
+
+                return true;
+              });
+
+              await imap.closeBoxAsync(false);
+            } catch (err) {
+            } finally {
+              imap.end();
+            }
+          },
+
+          error: reject,
+          end: resolve,
+        },
+        false
+      );
+    });
+  }
+
+  scanSentForWhitelist(addresses: Addresses): Promise<void> {
+    if (!this.config) return Promise.reject(Error('No config'));
+
+    return new Promise((resolve, reject) => {
+      connect(
+        this.config,
+        {
+          async ready(imap) {
+            // Open Sent Mail (read)
+            const box = await imap.openBoxAsync('[Gmail]/Sent Mail');
+
+            // Get UNSEEN messages since yesterday
+            // const days = process.env.DAYS || 1;
+            // const since = new Date(Date.now() - days * 864e5);
+
+            const range = `${1}:*`;
+
+            await fetchAndFilter(imap, range, (msg, i) => {
+              if (i % BOX_MOD == 0) {
+                logger.spin(`${box.name}: ${i} of ${box.messages.total}`);
+              }
+
+              for (let address of getRecipients(msg)) {
+                addresses.markAddress('sent', address.address, msg.date);
+              }
+
+              return false;
+            });
+
+            await imap.closeBoxAsync(false);
+
+            imap.end();
+
+            // TODO: Need to makes
+          },
+
+          error: reject,
+          end: resolve,
+        },
+        false
+      );
+    });
+  }
+
+  async generate() {
+    if (this._generating) {
+      return this._generating;
     }
-    if (this._generating) return null;
 
     const addresses = new Addresses();
-    const bySize: GMaulParsedMail[] = [];
+
     this._generating = Promise.all([
-      connect(
-        this.config,
-        {
-          async ready(imap) {
-            await processSent(imap, addresses, bySize);
-          },
-        },
-        false
-      ),
-      connect(
-        this.config,
-        {
-          async ready(imap) {
-            await processInbox(imap, addresses, bySize);
-          },
-        },
-        false
-      ),
-    ]);
-    await this._generating;
-    this._generating = undefined;
+      this.scanSentForWhitelist(addresses),
+      this.scanInboxForWhitelist(addresses),
+    ]) as unknown as Promise<void>;
 
-    await addresses.save(getConfigPath(WHITELIST_FILE));
+    try {
+      logger.log('Generating whitelist (this may take a while)');
+      await this._generating;
+      logger.log('*************************************');
+      logger.spin();
+
+      await addresses.save(getConfigPath(WHITELIST_FILE));
+    } finally {
+      this._generating = undefined;
+    }
+
     this.addresses = addresses;
-
-    bySize.sort((a, b) => (a.size > b.size ? 1 : a.size < b.size ? -1 : 0));
-
-    // Log largest messages
-    // for (const msg in bySize) {
-    // logger.log(msg.size, msg.subject);
-    // }
-  },
-} as Whitelist;
+  }
+}

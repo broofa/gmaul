@@ -7,7 +7,7 @@ import { initFilters } from './filters.js';
 import { logger } from './logger.js';
 import { checkSubject, initSubjects, writeSubjects } from './subjects.js';
 import { fetchAndFilter, getAddress, getRecipients } from './util.js';
-import whitelist from './whitelist.js';
+import Whitelist from './whitelist.js';
 
 export interface GMaulParsedMail extends ParsedMail {
   uid: number;
@@ -27,110 +27,115 @@ export type GMaulMessage = GMaulParsedMail & {
   };
 };
 
-const config = await initConfig();
-await initSubjects(config);
-const filters = initFilters(config, whitelist);
+async function processMail(imap: GMaulConnection, whitelist: Whitelist) {
+  if (isProcessing) return;
+  isProcessing = true;
 
-let uidNext = 0;
 
-async function processMail(imap: GMaulConnection, numNewMessages = 0) {
-  logger.log('CHECKING');
-  // Load whitelist
+
   try {
-    await whitelist.init(config);
-  } catch (err) {
-    logger.error('Failed to initialize whitelist', err);
-  }
+    // Load whitelist
+    logger.spin('Loading whitelist');
+    await whitelist.update();
 
-  if (!whitelist.addresses) {
-    throw Error('Whitelist unexpectedly uninitialized');
-  }
+    // Open INBOX (read-write)
+    logger.spin('Opening INBOX...');
+    let box = await imap.openBoxAsync('INBOX', false);
 
-  // Open INBOX (read-write)
-  const box = await imap.openBoxAsync('INBOX', false);
-
-  let ids: ImapUID[];
-  const lastUid = uidNext || 0;
-  if (uidNext) {
-    // Get messages since last
-    ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
-  } else {
-    // First time through, get messages for the past week
-    const days = process.env.DAYS ? parseInt(process.env.DAYS) : 7;
-    const since = new Date(Date.now() - days * 864e5);
-    ids = await imap.searchAsync(['UNSEEN', ['SINCE', since.toDateString()]]);
-  }
-  uidNext = box.uidnext;
-
-  if (ids.length > 0) {
-    let loggedTime = false;
-
-    // For each message ...
-    const spamIds: Set<ImapUID> = new Set();
-
-    const filteredIds = await fetchAndFilter(imap, ids.map(String), (msg) => {
-      // Fetch will return the last message, even if it's uid is less than the
-      // range requested (wtf?!?), so we throw those away here.
-      if (msg.uid < lastUid) return false;
-
-      const from = getAddress(msg.from);
-
-      // Build enhanced message object
-      const gMsg: GMaulMessage = Object.assign(Object.create(msg), {
-        _allow: undefined as undefined | string,
-        _deny: undefined as undefined | string,
-        _: {
-          from: from?.address.toLowerCase(),
-          fromName: from?.name?.toLowerCase(),
-          recipients: getRecipients(msg),
-          subject: msg.subject
-            ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
-            : '',
-        },
-        allow(status: string) {
-          this._allow = status;
-        },
-        deny(status: string) {
-          this._deny = status;
-        },
-      });
-
-      // Apply each filter
-      filters.find((filter) => {
-        filter?.(gMsg);
-        return gMsg._deny || gMsg._allow;
-      });
-
-      // Check for messages w/ duplicate subjects
-      if (!gMsg._allow) checkSubject(gMsg, spamIds);
-
-      if (gMsg._deny) {
-        if (!loggedTime) logger.log(new Date().toLocaleString());
-        loggedTime = true;
-        logger.log(
-          `${gMsg._deny}: (${gMsg._.from})${
-            gMsg._.subject ? ` "${gMsg.subject}"` : ''
-          }`
-        );
-      }
-
-      return gMsg._deny ? true : false;
-    });
-
-    await writeSubjects();
-    for (const id of filteredIds) spamIds.add(id);
-
-    if (spamIds.size) {
-      // Also mark as seen.  Do this before moving, as message uids change as a
-      // result of the move, below?
-      // await imap.addFlagsAsync(spamIds, '\\Seen');
-
-      // Move out of Inbox
-      await imap.moveAsync([...spamIds], config.trash);
+    let ids: ImapUID[];
+    const lastUid = uidNext || 0;
+    if (uidNext) {
+      // Get messages since last
+      logger.spin('Searching UNSEEN messages (update)...');
+      ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
+    } else {
+      // First time through, get messages for the past week
+      const days = process.env.DAYS ? parseInt(process.env.DAYS) : 7;
+      const since = new Date(Date.now() - days * 864e5);
+      logger.spin('Searching UNSEEN messages (past week)...');
+      ids = await imap.searchAsync(['UNSEEN', ['SINCE', since.toDateString()]]);
     }
-  }
+    uidNext = box.uidnext;
 
-  await imap.closeBoxAsync(true);
+    if (ids.length > 0) {
+      // For each message ...
+      const spamIds: Set<ImapUID> = new Set();
+
+      logger.spin('Filtering UNSEEN...');
+      const filteredIds = await fetchAndFilter(imap, ids.map(String), (msg) => {
+        // Fetch will return the last message, even if it's uid is less than the
+        // range requested (wtf?!?), so we throw those away here.
+        if (msg.uid < lastUid) return false;
+
+        const from = getAddress(msg.from);
+
+        // Build enhanced message object
+        const gMsg: GMaulMessage = Object.assign(Object.create(msg), {
+          _allow: undefined as undefined | string,
+          _deny: undefined as undefined | string,
+          _: {
+            from: from?.address.toLowerCase(),
+            fromName: from?.name?.toLowerCase(),
+            recipients: getRecipients(msg),
+            subject: msg.subject
+              ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
+              : '',
+          },
+          allow(status: string) {
+            this._allow = status;
+          },
+          deny(status: string) {
+            this._deny = status;
+          },
+        });
+
+        // Apply each filter
+        filters.find((filter) => {
+          filter?.(gMsg);
+          return gMsg._deny || gMsg._allow;
+        });
+
+        // Check for messages w/ duplicate subjects
+        if (!gMsg._allow) checkSubject(gMsg, spamIds);
+
+        if (gMsg._deny) {
+          logger.log(
+            `${gMsg._deny}: (${gMsg._.from})${
+              gMsg._.subject ? ` "${gMsg.subject}"` : ''
+            }`
+          );
+        }
+
+        return gMsg._deny ? true : false;
+      });
+
+      logger.spin('Saving subjects...');
+      await writeSubjects();
+      for (const id of filteredIds) spamIds.add(id);
+
+      if (spamIds.size) {
+        // Also mark as seen.  Do this before moving, as message uids change as a
+        // result of the move, below?
+        // await imap.addFlagsAsync(spamIds, '\\Seen');
+
+        // Move out of Inbox
+        logger.spin(`Moving messages to ${config.trash}...`);
+        await imap.moveAsync([...spamIds], config.trash);
+      }
+    }
+
+    logger.spin('Closing INBOX...');
+    await imap.closeBoxAsync(true);
+  } catch (err) {
+    if ('source' in (err as Error)) {
+      logger.error(err);
+    } else {
+      throw err;
+    }
+  } finally {
+    isProcessing = false;
+    logger.spin();
+  }
 }
 
 process.on('uncaughtException', (err) => {
@@ -146,9 +151,22 @@ process.on('unhandledRejection', (err) => {
 let imap: GMaulConnection | undefined;
 let reconnectTimer: NodeJS.Timeout | undefined;
 
-logger.log('starting');
+let uidNext = 0;
+let isProcessing = false;
+
+const config = await initConfig();
+await initSubjects(config);
+
+const whitelist = new Whitelist(config);
+
+const filters = initFilters(config, whitelist);
 
 connect(config, {
-  ready: processMail,
-  mail: processMail,
+  ready(imap: GMaulConnection) {
+    processMail(imap, whitelist);
+  },
+
+  mail(imap: GMaulConnection, numNewMessages: number) {
+    processMail(imap, whitelist);
+  },
 });

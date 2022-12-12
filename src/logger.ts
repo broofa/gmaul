@@ -1,14 +1,18 @@
-export class GmaulLogger {
-  #ticked = false;
+import ora from 'ora';
 
-  tick(char = '.') {
-    process.stdout.write(char);
-    this.#ticked = true;
+const spinner = ora();
+export class GmaulLogger {
+  untick() {
+    if (spinner.text) process.stdout.write('\r');
   }
 
-  untick() {
-    if (this.#ticked) process.stdout.write('\n');
-    this.#ticked = false;
+  spin(str?: string) {
+    if (str) {
+      spinner.text = str;
+      spinner.start();
+    } else {
+      spinner.stop();
+    }
   }
 
   log(...args: any[]) {

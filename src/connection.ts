@@ -22,13 +22,12 @@ function _connect(
   const imap = new Imap(config.server);
   const asyncImap = asyncProxy(imap) as GMaulConnection;
 
-  logger.log('Connecting to IMAP server');
+  logger.spin('Connecting to IMAP server');
   const listenerEntries = Object.entries(listeners).map(
     ([event, listener]) =>
       [
         event,
         (...args: any[]) => {
-          logger.log(`listener ('${event}') called`);
           listener(asyncImap, ...args);
         },
       ] as [string, (...args: any[]) => void]
@@ -36,32 +35,30 @@ function _connect(
 
   function subscribe() {
     for (const [event, listener] of listenerEntries) {
-      logger.log(`subscribing '${event}'`);
       imap.on(event, listener);
     }
   }
 
   function unsubscribe() {
     for (const [event, listener] of listenerEntries) {
-      logger.log(`unsubscribing '${event}'`);
       imap.off(event, listener);
     }
   }
 
   imap.on('ready', (...args: any[]) => {
-    logger.log('READY', ...args);
+    // logger.log('READY', ...args);
   });
   imap.on('error', (...args: any[]) => {
-    logger.log('ERROR', ...args);
+    // logger.log('ERROR', ...args);
     () => unsubscribe();
   });
 
   imap.on('close', (...args: any[]) => {
-    logger.log('CLOSE', ...args);
+    // logger.log('CLOSE', ...args);
     () => unsubscribe();
   });
   imap.on('end', (...args: any[]) => {
-    logger.log('END', ...args);
+    // logger.log('END', ...args);
     () => unsubscribe();
   });
 
@@ -84,7 +81,9 @@ export function connect(
     function reconnect(reason: string | Error) {
       if (timer) return;
 
-      logger.log(`Reconnecting in ${delay} ms`, reason);
+      if (delay) {
+        logger.log(`Reconnecting in ${delay} ms`, reason);
+      }
 
       setTimeout(() => {
         timer = undefined;
@@ -110,7 +109,6 @@ export function connect(
   } else {
     const imap = _connect(config, listeners);
     return new Promise((resolve, reject) => {
-      logger.log('connect promise');
       imap.on('ready', () => resolve(undefined));
       imap.on('error', (err: Error) => reject(err));
       imap.on('end', (err: Error) => resolve());

@@ -2,7 +2,7 @@ import { unicodeBlockCount } from '@broofa/stringlang';
 import { GMaulConfig } from 'config.js';
 import { GMaulMessage } from './cli.js';
 import { getAddress, isAllCaps } from './util.js';
-import { Whitelist } from './whitelist.js';
+import Whitelist from './whitelist.js';
 
 export type FilterFunction = (msg: GMaulMessage) => void;
 
