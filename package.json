@@ -11,6 +11,7 @@
     "@broofa/asyncproxy": "^1.0.6",
     "@broofa/stringlang": "^3.0.0",
     "colors": "1.4.0",
+    "comment-json": "^4.2.3",
     "imap": "0.8.19",
     "mailparser": "^3.5.0",
     "ora": "^6.1.2"

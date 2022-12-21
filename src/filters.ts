@@ -1,19 +1,46 @@
 import { unicodeBlockCount } from '@broofa/stringlang';
 import { GMaulConfig } from 'config.js';
 import { GMaulMessage } from './cli.js';
+import stopwords from './stopwords.js';
 import { getAddress, isAllCaps } from './util.js';
 import Whitelist from './whitelist.js';
 
 export type FilterFunction = (msg: GMaulMessage) => void;
 
-export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
-  const whitelistRegex =
-    config.whitelist &&
-    new RegExp(`\\b((?:${config.whitelist.join('|')})\\w*)`, 'i');
+function buildWordsRegex(words: string[], fullWords = true) {
+  if (!words || words.length < 1) return;
+  const re = `(${words.sort().join('|')})`;
+  return new RegExp(fullWords ? `\\b${re}\\b` : re, 'i');
+}
 
-  const blacklistRegex =
-    config.blacklist &&
-    new RegExp(`\\b((?:${config.blacklist.join('|')})\\w*)`, 'i');
+function buildStopwordRegex(languages: string[]) {
+  const swords = new Set<string>();
+  for (const [lang, words] of Object.entries(stopwords)) {
+    if (languages.includes(lang)) continue;
+    for (const word of words) {
+      swords.add(word);
+    }
+  }
+
+  for (const lang of languages) {
+    const words = stopwords[lang];
+    if (!words) throw new Error(`Unsupported language: ${lang}`);
+    for (const word of words) {
+      if (swords.has(word)) {
+        swords.delete(word);
+      }
+    }
+  }
+
+  if (swords.size > 0) {
+    return buildWordsRegex([...swords]);
+  }
+}
+
+export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
+  const stopwordRegex = buildStopwordRegex(config.languages);
+  const whitelistRegex = buildWordsRegex(config.whitelist, false);
+  const blacklistRegex = buildWordsRegex(config.blacklist, false);
 
   function includesUserEmail(str: string) {
     str = str.toLowerCase();
@@ -34,7 +61,10 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
   const FILTERS: FilterFunction[] = [
     // ORDER HERE IS IMPORTANT
 
+    //
     // ALLOW filters (go before DENY)
+    //
+
     (msg) => {
       if (!whitelistRegex) return;
 
@@ -62,7 +92,19 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
       }
     },
 
+    //
     // DENY filters
+    //
+
+    (msg) => {
+      if (!stopwordRegex) return;
+
+      if (stopwordRegex.test(msg._.fromName))
+        msg.deny(`Stopword: "${RegExp.$1}" (sender)`);
+      if (stopwordRegex.test(msg._.subject))
+        msg.deny(`Stopword: "${RegExp.$1}" (subject)`);
+    },
+
     (msg) => {
       if (!blacklistRegex) return;
 

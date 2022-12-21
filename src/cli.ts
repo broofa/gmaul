@@ -2,7 +2,7 @@
 
 import { ParsedMail } from 'mailparser';
 import { initConfig } from './config.js';
-import { connect, GMaulConnection } from './connection.js';
+import { GMaulConnection, connect } from './connection.js';
 import { initFilters } from './filters.js';
 import { logger } from './logger.js';
 import { checkSubject, initSubjects, writeSubjects } from './subjects.js';
@@ -30,8 +30,6 @@ export type GMaulMessage = GMaulParsedMail & {
 async function processMail(imap: GMaulConnection, whitelist: Whitelist) {
   if (isProcessing) return;
   isProcessing = true;
-
-
 
   try {
     // Load whitelist
@@ -167,6 +165,7 @@ connect(config, {
   },
 
   mail(imap: GMaulConnection, numNewMessages: number) {
+    logger.log(`Processing ${numNewMessages} new messages`);
     processMail(imap, whitelist);
   },
 });
