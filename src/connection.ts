@@ -40,7 +40,6 @@ function _connect(
   }
 
   function unsubscribe(...args: any[]) {
-    console.log('UNSUBSCRIBE', ...args);
     for (const [event, listener] of listenerEntries) {
       imap.off(event, listener);
     }
