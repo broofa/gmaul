@@ -1,7 +1,7 @@
 import { unicodeBlockCount } from '@broofa/stringlang';
 import { GMaulConfig } from 'config.js';
 import { GMaulMessage } from './cli.js';
-import stopwords from './stopwords.js';
+import { init as stopwordsInit } from './stopwords.js';
 import { getAddress, isAllCaps } from './util.js';
 import Whitelist from './whitelist.js';
 
@@ -13,32 +13,8 @@ function buildWordsRegex(words: string[], fullWords = true) {
   return new RegExp(fullWords ? `\\b${re}\\b` : re, 'i');
 }
 
-function buildStopwordRegex(languages: string[]) {
-  const swords = new Set<string>();
-  for (const [lang, words] of Object.entries(stopwords)) {
-    if (languages.includes(lang)) continue;
-    for (const word of words) {
-      swords.add(word);
-    }
-  }
-
-  for (const lang of languages) {
-    const words = stopwords[lang];
-    if (!words) throw new Error(`Unsupported language: ${lang}`);
-    for (const word of words) {
-      if (swords.has(word)) {
-        swords.delete(word);
-      }
-    }
-  }
-
-  if (swords.size > 0) {
-    return buildWordsRegex([...swords]);
-  }
-}
-
 export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
-  const stopwordRegex = buildStopwordRegex(config.languages);
+  const stopwords = stopwordsInit(config.languages);
   const whitelistRegex = buildWordsRegex(config.whitelist, false);
   const blacklistRegex = buildWordsRegex(config.blacklist, false);
 
@@ -97,15 +73,6 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
     //
 
     (msg) => {
-      if (!stopwordRegex) return;
-
-      if (stopwordRegex.test(msg._.fromName))
-        msg.deny(`Stopword: "${RegExp.$1}" (sender)`);
-      if (stopwordRegex.test(msg._.subject))
-        msg.deny(`Stopword: "${RegExp.$1}" (subject)`);
-    },
-
-    (msg) => {
       if (!blacklistRegex) return;
 
       if (blacklistRegex.test(msg._.from))
@@ -133,12 +100,12 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
     },
     (msg) => {
       const ctype = msg.headers.get('content-type');
-      // @ts-ignore HeaderValue is complicated enough it's writing type-checking logic
+      // @ts-ignore HeaderValue type is complicated
       const charset: string = ctype?.params?.charset?.toLowerCase();
       if (charset && charset != 'utf-8') msg.deny(`charset ${charset}`);
     },
     (msg) => {
-      const name = msg._.fromName;
+      const {fromName: name} = msg._;
       if (name.length <= 1) return;
 
       const sl = unicodeBlockCount(name);
@@ -157,7 +124,7 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
         msg.deny('not sent to user');
     },
     (msg) => {
-      // Spam comes from "foo###@gmail.com" address
+      // Spam comes from "foo##@gmail.com" address
       if (/\d\d@gmail.com/.test(msg._.from)) msg.deny('gmail## sender');
     },
     (msg) => {
@@ -175,6 +142,23 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
       const user = msg._.recipients.find((e) => includesUserEmail(e.address));
       if (user?.name && !includesUserName(user.name))
         msg.deny('user email but not user name');
+    },
+    (msg) => {
+      const senderStop = stopwords.detect(msg._.fromName);
+      if (senderStop)
+        msg.deny(
+          `${senderStop.language.toUpperCase()} stopword: "${
+            senderStop.word
+          }" (sender)`
+        );
+
+      const subjectStop = stopwords.detect(msg._.subject);
+      if (subjectStop)
+        msg.deny(
+          `${subjectStop.language.toUpperCase()} stopword: "${
+            subjectStop.word
+          }" (subject)`
+        );
     },
   ];
   return FILTERS;

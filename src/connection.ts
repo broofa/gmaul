@@ -39,28 +39,16 @@ function _connect(
     }
   }
 
-  function unsubscribe() {
+  function unsubscribe(...args: any[]) {
+    console.log('UNSUBSCRIBE', ...args);
     for (const [event, listener] of listenerEntries) {
       imap.off(event, listener);
     }
   }
 
-  imap.on('ready', (...args: any[]) => {
-    // logger.log('READY', ...args);
-  });
-  imap.on('error', (...args: any[]) => {
-    // logger.log('ERROR', ...args);
-    () => unsubscribe();
-  });
-
-  imap.on('close', (...args: any[]) => {
-    // logger.log('CLOSE', ...args);
-    () => unsubscribe();
-  });
-  imap.on('end', (...args: any[]) => {
-    // logger.log('END', ...args);
-    () => unsubscribe();
-  });
+  imap.on('error', unsubscribe);
+  imap.on('close', unsubscribe);
+  imap.on('end', unsubscribe);
 
   subscribe();
 
@@ -85,7 +73,7 @@ export function connect(
         logger.log(`Reconnecting in ${delay} ms`, reason);
       }
 
-      setTimeout(() => {
+      timer = setTimeout(() => {
         timer = undefined;
         const imap = _connect(config, listeners);
 

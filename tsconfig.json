@@ -11,5 +11,6 @@
     "sourceMap": true,
     "strict": true,
     "target": "ESNext",
-  }
+  },
+  "include": ["src/**/*", "additional.d.ts", "config/additional.d.ts"],
 }

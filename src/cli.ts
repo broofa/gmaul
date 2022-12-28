@@ -28,112 +28,122 @@ export type GMaulMessage = GMaulParsedMail & {
 };
 
 async function processMail(imap: GMaulConnection, whitelist: Whitelist) {
-  if (isProcessing) return;
-  isProcessing = true;
+  // Load whitelist
+  logger.spin('Loading whitelist');
+  await whitelist.update();
 
-  try {
-    // Load whitelist
-    logger.spin('Loading whitelist');
-    await whitelist.update();
+  // Open INBOX (read-write)
+  logger.spin('Opening INBOX...');
+  let box = await imap.openBoxAsync('INBOX', false);
 
-    // Open INBOX (read-write)
-    logger.spin('Opening INBOX...');
-    let box = await imap.openBoxAsync('INBOX', false);
+  let ids: ImapUID[];
+  const lastUid = uidNext || 0;
+  if (uidNext) {
+    // Get messages since last
+    logger.spin('Searching UNSEEN messages (update)...');
+    ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
+  } else {
+    // First time through, get messages for the past week
+    const days = process.env.DAYS ? parseInt(process.env.DAYS) : 7;
+    const since = new Date(Date.now() - days * 864e5);
+    logger.spin('Searching UNSEEN messages (past week)...');
+    ids = await imap.searchAsync(['UNSEEN', ['SINCE', since.toDateString()]]);
+  }
+  uidNext = box.uidnext;
 
-    let ids: ImapUID[];
-    const lastUid = uidNext || 0;
-    if (uidNext) {
-      // Get messages since last
-      logger.spin('Searching UNSEEN messages (update)...');
-      ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
-    } else {
-      // First time through, get messages for the past week
-      const days = process.env.DAYS ? parseInt(process.env.DAYS) : 7;
-      const since = new Date(Date.now() - days * 864e5);
-      logger.spin('Searching UNSEEN messages (past week)...');
-      ids = await imap.searchAsync(['UNSEEN', ['SINCE', since.toDateString()]]);
-    }
-    uidNext = box.uidnext;
+  if (ids.length > 0) {
+    // For each message ...
+    const spamIds: Set<ImapUID> = new Set();
 
-    if (ids.length > 0) {
-      // For each message ...
-      const spamIds: Set<ImapUID> = new Set();
+    logger.spin('Filtering UNSEEN...');
+    const filteredIds = await fetchAndFilter(imap, ids.map(String), (msg) => {
+      // Fetch will return the last message, even if it's uid is less than the
+      // range requested (wtf?!?), so we throw those away here.
+      if (msg.uid < lastUid) return false;
 
-      logger.spin('Filtering UNSEEN...');
-      const filteredIds = await fetchAndFilter(imap, ids.map(String), (msg) => {
-        // Fetch will return the last message, even if it's uid is less than the
-        // range requested (wtf?!?), so we throw those away here.
-        if (msg.uid < lastUid) return false;
+      const from = getAddress(msg.from);
 
-        const from = getAddress(msg.from);
-
-        // Build enhanced message object
-        const gMsg: GMaulMessage = Object.assign(Object.create(msg), {
-          _allow: undefined as undefined | string,
-          _deny: undefined as undefined | string,
-          _: {
-            from: from?.address.toLowerCase(),
-            fromName: from?.name?.toLowerCase(),
-            recipients: getRecipients(msg),
-            subject: msg.subject
-              ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
-              : '',
-          },
-          allow(status: string) {
-            this._allow = status;
-          },
-          deny(status: string) {
-            this._deny = status;
-          },
-        });
-
-        // Apply each filter
-        filters.find((filter) => {
-          filter?.(gMsg);
-          return gMsg._deny || gMsg._allow;
-        });
-
-        // Check for messages w/ duplicate subjects
-        if (!gMsg._allow) checkSubject(gMsg, spamIds);
-
-        if (gMsg._deny) {
-          logger.log(
-            `${gMsg._deny}: (${gMsg._.from})${
-              gMsg._.subject ? ` "${gMsg.subject}"` : ''
-            }`
-          );
-        }
-
-        return gMsg._deny ? true : false;
+      // Build enhanced message object
+      const gMsg: GMaulMessage = Object.assign(Object.create(msg), {
+        _allow: undefined as undefined | string,
+        _deny: undefined as undefined | string,
+        _: {
+          from: from?.address.toLowerCase(),
+          fromName: from?.name?.toLowerCase(),
+          recipients: getRecipients(msg),
+          subject: msg.subject
+            ? msg.subject.replace(/^(?:re:\s*|fwd:\s*)+/i, '')
+            : '',
+        },
+        allow(status: string) {
+          this._allow = status;
+        },
+        deny(status: string) {
+          this._deny = status;
+        },
       });
 
-      logger.spin('Saving subjects...');
-      await writeSubjects();
-      for (const id of filteredIds) spamIds.add(id);
+      // Apply each filter
+      filters.find((filter) => {
+        filter?.(gMsg);
+        return gMsg._deny || gMsg._allow;
+      });
 
-      if (spamIds.size) {
-        // Also mark as seen.  Do this before moving, as message uids change as a
-        // result of the move, below?
-        // await imap.addFlagsAsync(spamIds, '\\Seen');
+      // Check for messages w/ duplicate subjects
+      if (!gMsg._allow) checkSubject(gMsg, spamIds);
 
-        // Move out of Inbox
-        logger.spin(`Moving messages to ${config.trash}...`);
-        await imap.moveAsync([...spamIds], config.trash);
+      if (gMsg._deny) {
+        logger.log(
+          `${gMsg._deny}: (${gMsg._.from})${
+            gMsg._.subject ? ` "${gMsg.subject}"` : ''
+          }`
+        );
       }
-    }
 
-    logger.spin('Closing INBOX...');
-    await imap.closeBoxAsync(true);
-  } catch (err) {
-    if ('source' in (err as Error)) {
-      logger.error(err);
-    } else {
-      throw err;
+      return gMsg._deny ? true : false;
+    });
+
+    logger.spin('Saving subjects...');
+    await writeSubjects();
+    for (const id of filteredIds) spamIds.add(id);
+
+    if (spamIds.size) {
+      // Also mark as seen.  Do this before moving, as message uids change as a
+      // result of the move, below?
+      // await imap.addFlagsAsync(spamIds, '\\Seen');
+
+      // Move out of Inbox
+      logger.spin(`Moving messages to ${config.trash}...`);
+      await imap.moveAsync([...spamIds], config.trash);
     }
-  } finally {
-    isProcessing = false;
-    logger.spin();
   }
+
+  logger.spin('Closing INBOX...');
+  await imap.closeBoxAsync(true);
+}
+
+async function pollForMail(imap: GMaulConnection, whitelist: Whitelist) {
+  const since = Date.now() - lastPoll;
+
+  if (since < config.interval) {
+    logger.spin(`Polling in ${Math.round((config.interval - since) / 1000)}`);
+  } else {
+    try {
+      isProcessing = true;
+      await processMail(imap, whitelist);
+    } catch (err) {
+      if ('source' in (err as Error)) {
+        logger.error(err);
+      } else {
+        throw err;
+      }
+    } finally {
+      isProcessing = false;
+      lastPoll = Date.now();
+    }
+  }
+
+  setTimeout(() => pollForMail(imap, whitelist), 1000);
 }
 
 process.on('uncaughtException', (err) => {
@@ -146,11 +156,9 @@ process.on('unhandledRejection', (err) => {
   process.exit();
 });
 
-let imap: GMaulConnection | undefined;
-let reconnectTimer: NodeJS.Timeout | undefined;
-
 let uidNext = 0;
 let isProcessing = false;
+let lastPoll = 0;
 
 const config = await initConfig();
 await initSubjects(config);
@@ -161,11 +169,6 @@ const filters = initFilters(config, whitelist);
 
 connect(config, {
   ready(imap: GMaulConnection) {
-    processMail(imap, whitelist);
-  },
-
-  mail(imap: GMaulConnection, numNewMessages: number) {
-    logger.log(`Processing ${numNewMessages} new messages`);
-    processMail(imap, whitelist);
+    pollForMail(imap, whitelist);
   },
 });

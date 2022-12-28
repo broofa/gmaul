@@ -1,6 +1,6 @@
 import ora from 'ora';
 
-const spinner = ora();
+const spinner = ora({spinner: 'dots', interval: 100});
 export class GmaulLogger {
   untick() {
     if (spinner.text) process.stdout.write('\r');
