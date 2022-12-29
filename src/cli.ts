@@ -165,7 +165,7 @@ await initSubjects(config);
 
 const whitelist = new Whitelist(config);
 
-const filters = initFilters(config, whitelist);
+const filters = await initFilters(config, whitelist);
 
 connect(config, {
   ready(imap: GMaulConnection) {

@@ -13,8 +13,8 @@ function buildWordsRegex(words: string[], fullWords = true) {
   return new RegExp(fullWords ? `\\b${re}\\b` : re, 'i');
 }
 
-export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
-  const stopwords = stopwordsInit(config.languages);
+export async function initFilters(config: GMaulConfig, whitelist: Whitelist) {
+  const stopwords = await stopwordsInit(config);
   const whitelistRegex = buildWordsRegex(config.whitelist, false);
   const blacklistRegex = buildWordsRegex(config.blacklist, false);
 
@@ -105,7 +105,7 @@ export function initFilters(config: GMaulConfig, whitelist: Whitelist) {
       if (charset && charset != 'utf-8') msg.deny(`charset ${charset}`);
     },
     (msg) => {
-      const {fromName: name} = msg._;
+      const { fromName: name } = msg._;
       if (name.length <= 1) return;
 
       const sl = unicodeBlockCount(name);

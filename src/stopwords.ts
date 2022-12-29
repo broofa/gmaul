@@ -1,4 +1,7 @@
+import fetch from 'node-fetch';
 import stopwords from 'stopwords-iso' assert { type: 'json' };
+import { GMaulConfig } from './config';
+import { logger } from './logger.js';
 
 interface SearchNode {
   language?: string;
@@ -37,10 +40,12 @@ class Searcher {
   }
 }
 
-export function init(exemptLanguages: string[] = []) {
+export async function init(config: GMaulConfig) {
+  const { languages, commonWords } = config;
+
   const searcher = new Searcher();
 
-  exemptLanguages = exemptLanguages.map((lang) => lang.toLowerCase());
+  const exemptLanguages = languages.map((lang) => lang.toLowerCase());
 
   // Build list of words to exempt (stopwords in the user's prefered languages)
   const exemptWords = new Set<string>();
@@ -52,6 +57,15 @@ export function init(exemptLanguages: string[] = []) {
     }
   }
 
+  // Add common words to exempt list
+  logger.spin('Fetching common words');
+  const common = await fetch(commonWords).then((res) => res.text());
+  for (const word of common.split(/\s+/)) {
+    if (word.length < 3) continue;
+    exemptWords.add(word);
+  }
+
+  logger.spin('Building search tree');
   // Build search tree for stop words in other languages
   for (const [lang, words] of Object.entries(stopwords)) {
     if (exemptLanguages.includes(lang)) continue;
@@ -61,6 +75,7 @@ export function init(exemptLanguages: string[] = []) {
       if (word.length < 3) continue;
 
       if (exemptWords.has(word)) continue;
+
       searcher.add(word, lang);
     }
   }

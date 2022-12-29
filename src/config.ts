@@ -11,6 +11,7 @@ export type GMaulConfig = {
   emails: string[];
   names: string[];
   languages: ('EN' | 'ES' | 'IT' | 'FR')[];
+  commonWords: string;
   interval: number;
   server: Config;
   blacklist: string[];
