@@ -12,5 +12,5 @@
     "strict": true,
     "target": "ESNext",
   },
-  "include": ["src/**/*", "additional.d.ts", "config/additional.d.ts"],
+  "include": [ "src/**/*", "config/additional.d.ts" ],
 }

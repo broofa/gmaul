@@ -21,6 +21,10 @@ export function isAllCaps(v?: string) {
   return v && v.length > 5 && v === v.toUpperCase();
 }
 
+export function isNodeError(err: unknown) : err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err;
+}
+
 // Get all emails from AddressObject
 export function getAddresses(
   obj:

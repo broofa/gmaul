@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
-import { fetchAndFilter, getAddress, getRecipients } from './util.js';
+import {
+  fetchAndFilter,
+  getAddress,
+  getRecipients,
+  isNodeError,
+} from './util.js';
 
-import { getConfigPath, GMaulConfig, readFile } from './config.js';
+import { GMaulConfig, getConfigPath, readFile } from './config.js';
 import { connect } from './connection.js';
 import { logger } from './logger.js';
 
@@ -11,6 +16,7 @@ type ActivityStats = {
   inboxCount: number;
   inboxDate?: Date;
 };
+
 type ActivityCounts = {
   [email: string]: ActivityStats;
 };
@@ -46,10 +52,13 @@ class Addresses {
     return this.addresses[email.toLowerCase()];
   }
 
-  save(filePath: string) {
+  async save(filePath: string) {
+    const tmpPath = filePath + '.tmp';
+
     // TODO: This should be atomic (write to temp then move to path)
     const json = JSON.stringify({ addresses: this.addresses }, null, 2);
-    return fs.writeFile(filePath, json);
+    await fs.writeFile(tmpPath, json);
+    await fs.rename(tmpPath, filePath);
   }
 
   markAddress(source: 'sent' | 'inbox', address: string, date?: Date) {
@@ -90,20 +99,27 @@ export default class Whitelist {
       return await this._generating;
     }
 
+    let needsUpdate = false;
     try {
-      // Update whitelist if it's older than a day
       const stats = await fs.stat(getConfigPath(WHITELIST_FILE));
       if (Date.now() - stats.mtime.getTime() > 864e5) {
         logger.spin('Updating whitelist');
-        await this.generate();
+        needsUpdate = true;
       }
     } catch (err) {
-      // If whitelist doesn't exist, generate it
-      if ((err as NodeJS.ErrnoException).code == 'ENOENT') {
+      if (isNodeError(err) && err.code == 'ENOENT') {
         logger.spin('Generating whitelist');
-        await this.generate();
+        needsUpdate = true;
       } else {
         throw err;
+      }
+    }
+
+    if (needsUpdate) {
+      try {
+        await this.generate();
+      } catch (err) {
+        logger.error('Error during generate()', err);
       }
     }
 
@@ -117,7 +133,6 @@ export default class Whitelist {
   }
 
   async scanInboxForWhitelist(addresses: Addresses): Promise<void> {
-    if (!this.config) throw Error('No config');
     return new Promise((resolve, reject) => {
       connect(
         this.config,
