@@ -2,7 +2,6 @@
 
 import fs from 'node:fs/promises';
 
-import { parse } from 'comment-json';
 import { Config } from 'imap';
 import { ParsedMail } from 'mailparser';
 import path from 'node:path';
@@ -47,7 +46,7 @@ export function getConfigPath(filename: string) {
 
 export async function readFile<T>(filename: string): Promise<T> {
   const json = await fs.readFile(getConfigPath(filename), 'utf8');
-  return parse(json) as T;
+  return JSON.parse(json) as T;
 }
 
 export async function writeFile<T>(filename: string, obj: object) {
@@ -55,5 +54,7 @@ export async function writeFile<T>(filename: string, obj: object) {
 }
 
 export async function initConfig() {
-  return readFile<GMaulConfig>(CONFIG_FILE);
+  const cdir = getConfigPath('gmaul.js');
+  const { default: config } = await import(cdir);
+  return config as GMaulConfig;
 }

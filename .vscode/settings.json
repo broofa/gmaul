@@ -1,5 +1,5 @@
 {
   "javascript.preferences.importModuleSpecifier": "project-relative",
   "typescript.preferences.importModuleSpecifier": "project-relative",
-  "explorer.excludeGitIgnore": true
+  "explorer.excludeGitIgnore": false
 }
