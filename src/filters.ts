@@ -7,16 +7,24 @@ import Whitelist from './whitelist.js';
 
 export type FilterFunction = (msg: GMaulMessage) => void;
 
-function buildWordsRegex(words: string[], fullWords = true) {
-  if (!words || words.length < 1) return;
-  const re = `(${words.sort().join('|')})`;
-  return new RegExp(fullWords ? `\\b${re}\\b` : re, 'i');
+function buildFilter(terms: (string | RegExp)[]) {
+  return function (str: string) {
+    const lowerString = str.toLowerCase();
+    for (const term of terms) {
+      if (term instanceof RegExp) {
+        if (term.test(str)) return term;
+      } else if (lowerString.includes(term)) {
+        return term;
+      }
+    }
+    return false;
+  };
 }
 
 export async function initFilters(config: GMaulConfig, whitelist: Whitelist) {
   const stopwords = await stopwordsInit(config);
-  const whitelistRegex = buildWordsRegex(config.whitelist, false);
-  const blacklistRegex = buildWordsRegex(config.blacklist, false);
+  const whitelistFilter = buildFilter(config.whitelist);
+  const blacklistFilter = buildFilter(config.blacklist);
 
   function includesUserEmail(str: string) {
     str = str.toLowerCase();
@@ -42,14 +50,15 @@ export async function initFilters(config: GMaulConfig, whitelist: Whitelist) {
     //
 
     (msg) => {
-      if (!whitelistRegex) return;
+      if (!whitelistFilter) return;
 
-      if (whitelistRegex.test(msg._.from))
-        msg.allow(`whitelisted: "${RegExp.$1}" (sender email)`);
-      if (whitelistRegex.test(msg._.fromName))
-        msg.allow(`whitelisted: "${RegExp.$1}" (sender name)`);
-      if (whitelistRegex.test(msg._.subject))
-        msg.allow(`whitelisted: "${RegExp.$1}" (subject)`);
+      let match;
+      if ((match = whitelistFilter(msg._.from)))
+        msg.allow(`whitelisted: "${match}" (sender email)`);
+      if ((match = whitelistFilter(msg._.fromName)))
+        msg.allow(`whitelisted: "${match}" (sender name)`);
+      if ((match = whitelistFilter(msg._.subject)))
+        msg.allow(`whitelisted: "${match}" (subject)`);
     },
 
     (msg) => {
@@ -73,14 +82,15 @@ export async function initFilters(config: GMaulConfig, whitelist: Whitelist) {
     //
 
     (msg) => {
-      if (!blacklistRegex) return;
+      if (!blacklistFilter) return;
 
-      if (blacklistRegex.test(msg._.from))
-        msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
-      if (blacklistRegex.test(msg._.fromName))
-        msg.deny(`spammy term: "${RegExp.$1}" (sender)`);
-      if (blacklistRegex.test(msg._.subject))
-        msg.deny(`spammy term: "${RegExp.$1}" (subject)`);
+      let match;
+      if ((match = blacklistFilter(msg._.from)))
+        msg.deny(`spammy term: "${match}" (sender)`);
+      if ((match = blacklistFilter(msg._.fromName)))
+        msg.deny(`spammy term: "${match}" (sender)`);
+      if ((match = blacklistFilter(msg._.subject)))
+        msg.deny(`spammy term: "${match}" (subject)`);
     },
     (msg) => {
       if (msg._.from.split(/\s+/).length > 2)
