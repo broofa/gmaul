@@ -45,8 +45,13 @@ export function getConfigPath(filename: string) {
 }
 
 export async function readFile<T>(filename: string): Promise<T> {
-  const json = await fs.readFile(getConfigPath(filename), 'utf8');
-  return JSON.parse(json) as T;
+  try {
+    const json = await fs.readFile(getConfigPath(filename), 'utf8');
+    return JSON.parse(json) as T;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code == 'ENOENT') return {} as T;
+    throw err;
+  }
 }
 
 export async function writeFile<T>(filename: string, obj: object) {

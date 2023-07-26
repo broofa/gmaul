@@ -13,13 +13,13 @@ import { logger } from './logger.js';
 type ActivityStats = {
   sentCount: number;
   sentDate?: Date;
+  sentBytes: number;
   inboxCount: number;
   inboxDate?: Date;
+  inboxBytes: number;
 };
 
-type ActivityCounts = {
-  [email: string]: ActivityStats;
-};
+type ActivityCounts = Record<string, ActivityStats>;
 
 const WHITELIST_FILE = '_whitelist.json';
 const BOX_MOD = 1000; // How often to update the spinner
@@ -61,7 +61,12 @@ class Addresses {
     await fs.rename(tmpPath, filePath);
   }
 
-  markAddress(source: 'sent' | 'inbox', address: string, date?: Date) {
+  markAddress(
+    source: 'sent' | 'inbox',
+    address: string,
+    date?: Date,
+    bytes = 0
+  ) {
     if (typeof address != 'string') throw Error(`"${address}" is not a string`);
     address = address.toLowerCase();
 
@@ -71,16 +76,20 @@ class Addresses {
     if (!(address in this.addresses))
       this.addresses[address] = {
         sentCount: 0,
+        sentBytes: 0,
         inboxCount: 0,
+        inboxBytes: 0,
       };
 
     const a = this.addresses[address];
 
     if (source == 'sent') {
       a.sentCount += 1;
+      a.sentBytes += bytes;
       if (date && (!a.sentDate || a.sentDate < date)) a.sentDate = date;
     } else if (source == 'inbox') {
       a.inboxCount += 1;
+      a.inboxBytes += bytes;
       if (date && (!a.inboxDate || a.inboxDate < date)) a.inboxDate = date;
     }
   }
@@ -166,7 +175,12 @@ export default class Whitelist {
                 // Mark sender
                 const address = getAddress(msg.from);
                 if (address?.address) {
-                  addresses.markAddress('inbox', address.address, msg.date);
+                  addresses.markAddress(
+                    'inbox',
+                    address.address,
+                    msg.date,
+                    msg.size
+                  );
                 }
 
                 // Mark recipients

@@ -44,7 +44,7 @@ async function processMail(imap: GMaulConnection, whitelist: Whitelist) {
     ids = await imap.searchAsync(['UNSEEN', ['UID', `${uidNext}:*`]]);
   } else {
     // First time through, get messages for the past week
-    const days = process.env.DAYS ? parseInt(process.env.DAYS) : 7;
+    const days = process.env.DAYS ? parseInt(process.env.DAYS) : 30;
     const since = new Date(Date.now() - days * 864e5);
     logger.spin('Searching UNSEEN messages (past week)...');
     ids = await imap.searchAsync(['UNSEEN', ['SINCE', since.toDateString()]]);
