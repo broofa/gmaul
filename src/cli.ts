@@ -156,6 +156,17 @@ process.on('unhandledRejection', (err) => {
   process.exit();
 });
 
+import readline from 'readline';
+
+function watchStdin() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  rl.on('line', () => (lastPoll = 0));
+}
+
 let uidNext = 0;
 let isProcessing = false;
 let lastPoll = 0;
@@ -172,3 +183,5 @@ connect(config, {
     pollForMail(imap, whitelist);
   },
 });
+
+watchStdin();

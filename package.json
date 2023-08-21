@@ -28,7 +28,7 @@
   "scripts": {
     "build": "tsc && chmod a+x dist/cli.js",
     "build:watch": "tsc --watch",
-    "watch": "nodemon --watch dist dist/cli.js",
+    "watch": "npx nodemon --watch dist dist/cli.js",
     "start": "./dist/cli.js"
   },
   "license": "ISC"
