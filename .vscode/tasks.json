@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "build:watch",
+      "group": "build",
+      "label": "npm: build:watch",
+      "runOptions": {
+        "runOn": "folderOpen"
+      }
+    }
+  ]
+}

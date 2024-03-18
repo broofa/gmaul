@@ -14,22 +14,22 @@
     "imap": "0.8.19",
     "mailparser": "^3.5.0",
     "node-fetch": "^3.3.0",
-    "ora": "^6.1.2",
+    "ora": "8.0.1",
     "stopwords-iso": "^1.1.0"
   },
   "devDependencies": {
-    "@types/imap": "^0.8.35",
+    "@types/imap": "0.8.40",
     "@types/mailparser": "^3.4.0",
-    "@types/node": "^18.11.10",
-    "eslint": "^8.28.0",
-    "eslint-config-prettier": "^8.5.0",
-    "typescript": "^4.9.3"
+    "@types/node": "20.11.28",
+    "eslint": "8.57.0",
+    "eslint-config-prettier": "9.1.0",
+    "typescript": "5.4.2"
   },
   "scripts": {
     "build": "tsc && chmod a+x dist/cli.js",
     "build:watch": "tsc --watch",
-    "watch": "npx nodemon --watch dist dist/cli.js",
-    "start": "./dist/cli.js"
+    "start": "node dist/cli.js"
   },
-  "license": "ISC"
+  "license": "ISC",
+  "packageManager": "npm@10.5.0+sha256.17ca6e08e7633b624e8f870db81a78f46afe119de62bcaf0a7407574139198fc"
 }

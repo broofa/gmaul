@@ -156,6 +156,13 @@ process.on('unhandledRejection', (err) => {
   process.exit();
 });
 
+// Do we need this?  tsx seemed to not want to exit at one point, but maybe it's
+// working okay now?
+//
+// process.on('SIGINT', function () {
+//   process.exit();
+// });
+
 import readline from 'readline';
 
 function watchStdin() {

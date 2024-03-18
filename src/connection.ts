@@ -1,7 +1,7 @@
 /* eslint-disable no-unused-vars */
 import asyncProxy from '@broofa/asyncproxy';
 import { GMaulConfig } from 'config';
-import { Box, default as Connection, default as Imap } from 'imap';
+import { Box, default as Connection } from 'imap';
 import { logger } from './logger.js';
 
 // Declare promisified versions of methods that we call via asyncproxy
@@ -19,8 +19,8 @@ function _connect(
   config: GMaulConfig,
   listeners: Record<string, (...args: any[]) => void>
 ) {
-  const imap = new Imap(config.server);
-  const asyncImap = asyncProxy(imap) as GMaulConnection;
+  const conn = new Connection(config.server);
+  const asyncConn = asyncProxy(conn) as GMaulConnection;
 
   logger.spin('Connecting to IMAP server');
   const listenerEntries = Object.entries(listeners).map(
@@ -28,32 +28,32 @@ function _connect(
       [
         event,
         (...args: any[]) => {
-          listener(asyncImap, ...args);
+          listener(asyncConn, ...args);
         },
       ] as [string, (...args: any[]) => void]
   );
 
   function subscribe() {
     for (const [event, listener] of listenerEntries) {
-      imap.on(event, listener);
+      conn.on(event, listener);
     }
   }
 
   function unsubscribe(...args: any[]) {
     for (const [event, listener] of listenerEntries) {
-      imap.off(event, listener);
+      conn.off(event, listener);
     }
   }
 
-  imap.on('error', unsubscribe);
-  imap.on('close', unsubscribe);
-  imap.on('end', unsubscribe);
+  conn.on('error', unsubscribe);
+  conn.on('close', unsubscribe);
+  conn.on('end', unsubscribe);
 
   subscribe();
 
-  imap.connect();
+  conn.connect();
 
-  return asyncImap;
+  return asyncConn;
 }
 
 export function connect(
